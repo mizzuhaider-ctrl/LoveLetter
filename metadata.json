@@ -1,0 +1,6 @@
+{
+  "name": "Love Page Maker",
+  "description": "Create a personalized, romantic mobile-first love proposal page they literally can't say no to.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
