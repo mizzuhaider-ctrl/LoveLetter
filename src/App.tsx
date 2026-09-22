@@ -40,22 +40,16 @@ export default function App() {
     return null;
   });
 
-  // Proposal state initialized with recent proposal from storage to survive refreshes
-  const [proposal, setProposal] = useState<LoveProposal>(() => {
-    const recent = getRecentProposal();
-    if (recent) {
-      return recent;
-    }
-    return {
-      id: generateUniqueId(),
-      recipientName: '',
-      yourName: '',
-      questionChoice: 'gf',
-      customQuestion: '',
-      message: '',
-      createdAt: Date.now(),
-    };
-  });
+  // Proposal state initialized with a fresh blank proposal for the creator page
+  const [proposal, setProposal] = useState<LoveProposal>(() => ({
+    id: generateUniqueId(),
+    recipientName: '',
+    yourName: '',
+    questionChoice: 'gf',
+    customQuestion: '',
+    message: '',
+    createdAt: Date.now(),
+  }));
 
   useEffect(() => {
     // Check if user accessed via explicit /love, /love/:id, /letter, or ?love=... or ?id=... or ?recipient=...
@@ -167,13 +161,6 @@ export default function App() {
 
       setIsRecipientRoute(true);
       setViewState('proposal');
-    } else {
-      // If photo was saved in IndexedDB (e.g. if localStorage hit quota limits), recover it
-      getPhotoFromIDB('recent_photo').then((recentPhoto) => {
-        if (recentPhoto) {
-          setProposal((prev) => (prev.photoUrl ? prev : { ...prev, photoUrl: recentPhoto }));
-        }
-      }).catch(() => {});
     }
   }, []);
 
