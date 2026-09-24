@@ -4,6 +4,7 @@ import { FloatingParticles } from './FloatingParticles';
 import { AudioPlayer } from './AudioPlayer';
 import { Sparkles } from 'lucide-react';
 import { generatePermanentSlug, encodeProposalToPayload } from '../utils/storage';
+import { PAYMENT_CONFIG, getDisplayPrice } from '../config/payment';
 
 interface CelebrationPageProps {
   proposal: LoveProposal;
@@ -16,17 +17,14 @@ interface CelebrationPageProps {
 }
 
 const PREMIUM_FEATURES = [
-  'Personalized names',
-  'Couple photo',
-  'Romantic message',
-  'Custom question',
-  'YES / NO experience',
-  'Playful NO button',
-  'Romantic music',
-  'Heart animations',
-  'YES celebration',
-  'Permanent personal link',
-  'WhatsApp sharing',
+  'Romantic Music',
+  'Couple Photo',
+  'Personalized Message',
+  'YES / NO Experience',
+  'Heart Animations',
+  'Romantic Celebration',
+  'Personal Shareable Link',
+  'WhatsApp Sharing',
 ];
 
 export const CelebrationPage: React.FC<CelebrationPageProps> = React.memo(({
@@ -176,7 +174,7 @@ export const CelebrationPage: React.FC<CelebrationPageProps> = React.memo(({
           </div>
         </div>
 
-        {/* If Creator Preview Mode: Show ₹99 Premium Plan */}
+        {/* If Creator Preview Mode: Show Premium Plan */}
         {!isRecipientView && !proposal.isUnlocked && (
           <div
             id="premium-unlock-card"
@@ -187,23 +185,29 @@ export const CelebrationPage: React.FC<CelebrationPageProps> = React.memo(({
                 Make This Moment Yours Forever ❤️
               </h3>
               <p className="text-xs text-gray-500 mt-1">
-                The free preview is complete! Lock this permanent link to send to {proposal.recipientName || 'your love'}.
+                Your preview is ready. Unlock your personal shareable page.
               </p>
             </div>
 
-            {/* Premium — ₹1 Plan (Test Mode) */}
+            {/* Plan Card: 💖 PREMIUM */}
             <div className="rounded-2xl border-2 border-rose-200 bg-gradient-to-b from-rose-50/80 to-pink-50/40 p-4 mb-4">
               <div className="flex items-center justify-between mb-3">
                 <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-rose-500 text-white shadow-xs">
-                  Premium — ₹1
+                  💖 {PAYMENT_CONFIG.PAYMENT_TEST_MODE ? 'PREMIUM' : 'PREMIUM'}
                 </span>
                 <div className="text-right">
-                  <span className="text-2xl sm:text-3xl font-black text-rose-600">₹1</span>
-                  <p className="text-[11px] text-gray-400 font-medium">Test payment</p>
+                  <span className="text-2xl sm:text-3xl font-black text-rose-600">
+                    ₹{getDisplayPrice()}
+                  </span>
+                  {PAYMENT_CONFIG.PAYMENT_TEST_MODE && (
+                    <p className="text-[11px] font-bold text-amber-600 uppercase tracking-wider">
+                      TEST MODE
+                    </p>
+                  )}
                 </div>
               </div>
 
-              {/* Exact 11 Features Checklist */}
+              {/* Exact Features Checklist */}
               <div className="space-y-1.5 pt-2 border-t border-rose-200/80">
                 {PREMIUM_FEATURES.map((feature) => (
                   <div key={feature} className="flex items-center gap-2 text-xs sm:text-sm text-gray-800 font-medium">
@@ -221,8 +225,14 @@ export const CelebrationPage: React.FC<CelebrationPageProps> = React.memo(({
               onClick={onOpenUnlockModal}
               className="w-full py-4 px-6 rounded-2xl bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600 text-white font-bold text-base shadow-[0_8px_25px_rgba(244,63,94,0.35)] active:scale-[0.99] transition-all duration-200 cursor-pointer flex items-center justify-center gap-2"
             >
-              <span>Unlock My Love Page — ₹1 ❤️</span>
+              <span>UNLOCK FOR ₹{getDisplayPrice()} ❤️</span>
             </button>
+
+            {PAYMENT_CONFIG.PAYMENT_TEST_MODE && (
+              <p className="text-center text-[11px] text-gray-500 mt-2 font-medium">
+                TEST MODE — No real money will be charged.
+              </p>
+            )}
           </div>
         )}
 

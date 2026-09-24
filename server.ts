@@ -15,11 +15,34 @@ app.use(express.json());
 // PRICING & RAZORPAY CONFIGURATION (Single source of truth)
 // =============================================================
 import crypto from 'crypto';
+import {
+  PAYMENT_CONFIG as SHARED_PAYMENT_CONFIG,
+  getDisplayPrice,
+  getOrderAmountPaise,
+} from './src/config/payment';
+
+/**
+ * Server-side payment configuration derived directly from src/config/payment.ts
+ * Single source of truth.
+ */
+export const FREE_TEST_MODE = SHARED_PAYMENT_CONFIG.FREE_TEST_MODE;
+export const PAYMENT_TEST_MODE = SHARED_PAYMENT_CONFIG.PAYMENT_TEST_MODE;
+export const DISPLAY_PRICE = getDisplayPrice(PAYMENT_TEST_MODE, FREE_TEST_MODE);
+export const TEST_PAYMENT_AMOUNT = SHARED_PAYMENT_CONFIG.TEST_PAYMENT_AMOUNT;
+export const PRODUCTION_PRICE = SHARED_PAYMENT_CONFIG.PRODUCTION_PRICE;
 
 export const PAYMENT_CONFIG = {
-  price: 1, // Temporary TEST amount: ₹1 (change back to 99 after testing)
-  currency: 'INR',
-  planName: 'Premium — ₹1',
+  freeTestMode: FREE_TEST_MODE,
+  testMode: PAYMENT_TEST_MODE,
+  displayPrice: DISPLAY_PRICE,
+  /** Internal amount sent to Razorpay in paise from getOrderAmountPaise() */
+  amountInPaise: getOrderAmountPaise(PAYMENT_TEST_MODE),
+  currency: SHARED_PAYMENT_CONFIG.currency,
+  planName: FREE_TEST_MODE
+    ? `${SHARED_PAYMENT_CONFIG.planNameTest} (FREE TEST MODE)`
+    : PAYMENT_TEST_MODE
+    ? `${SHARED_PAYMENT_CONFIG.planNameTest} (TEST MODE)`
+    : SHARED_PAYMENT_CONFIG.planNameProd,
 };
 
 const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID?.trim();
@@ -43,14 +66,63 @@ app.get('/api/health', (_req: Request, res: Response) => {
 // Razorpay Payment Public Config (Never exposes secret key)
 app.get('/api/payment/config', (_req: Request, res: Response) => {
   res.json({
-    isConfigured: isRazorpayConfigured,
-    gateway: 'razorpay',
+    freeTestMode: FREE_TEST_MODE,
+    isConfigured: FREE_TEST_MODE ? true : isRazorpayConfigured,
+    gateway: FREE_TEST_MODE ? 'simulator' : 'razorpay',
     keyId: RAZORPAY_KEY_ID || '',
     currency: PAYMENT_CONFIG.currency,
-    price: PAYMENT_CONFIG.price,
-    amount: PAYMENT_CONFIG.price,
+    price: PAYMENT_CONFIG.displayPrice, // ₹0 in test mode, ₹99 in production
+    displayPrice: PAYMENT_CONFIG.displayPrice,
+    testMode: PAYMENT_TEST_MODE,
+    simulatedTestAmount: PAYMENT_TEST_MODE ? (TEST_PAYMENT_AMOUNT / 100) : 0, // ₹1 test amount
+    amountInPaise: PAYMENT_CONFIG.amountInPaise,
     planName: PAYMENT_CONFIG.planName,
   });
+});
+
+// Free Test Mode Backend Unlock API (Simulation only for development/testing without Razorpay KYC)
+app.post('/api/payment/free-test-unlock', async (req: Request, res: Response) => {
+  try {
+    // Security check: Only allowed if FREE_TEST_MODE is enabled on server
+    if (!FREE_TEST_MODE) {
+      return res.status(403).json({
+        success: false,
+        verified: false,
+        error: 'Free test mode is disabled',
+        message: 'Free test mode is disabled on this server. Please use standard Razorpay checkout.',
+      });
+    }
+
+    const { proposalId, yourName, recipientName } = req.body || {};
+    const randomHex = crypto.randomBytes(4).toString('hex');
+    const orderId = `FREE_TEST_${Date.now()}_${randomHex}`;
+    const paymentId = `pay_sim_${randomHex}`;
+
+    // Mark test order as verified only through backend cache
+    verifiedOrders.set(orderId, {
+      orderId,
+      paymentId,
+      verifiedAt: Date.now(),
+      proposalId,
+    });
+
+    return res.json({
+      success: true,
+      verified: true,
+      orderId,
+      paymentId,
+      mode: 'FREE_TEST_MODE',
+      message: 'FREE TEST MODE — No real payment was made. Test authorization verified.',
+    });
+  } catch (error: any) {
+    console.error('Error in free-test-unlock:', error);
+    return res.status(500).json({
+      success: false,
+      verified: false,
+      error: 'Test unlock failed',
+      message: 'Could not complete free test authorization.',
+    });
+  }
 });
 
 // Audio Tracks Auto-Detection API (Detects uploaded Hindi MP3 and preserves English)
@@ -144,8 +216,8 @@ app.post('/api/payment/create-order', async (req: Request, res: Response) => {
 
     const { proposalId, yourName } = req.body || {};
 
-    // Razorpay amount is in paise (₹1 = 100 paise)
-    const amountInPaise = Math.round(PAYMENT_CONFIG.price * 100);
+    // Razorpay amount is calculated server-side in paise (never trust frontend amount)
+    const amountInPaise = PAYMENT_CONFIG.amountInPaise;
 
     // Sanitized receipt identifier (max 40 chars)
     const sanitizedId = (proposalId || 'love').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 10);
@@ -161,6 +233,7 @@ app.post('/api/payment/create-order', async (req: Request, res: Response) => {
         proposalId: (proposalId || '').slice(0, 40),
         creator: (yourName || 'Romantic Creator').trim().slice(0, 40),
         plan: PAYMENT_CONFIG.planName,
+        testMode: String(PAYMENT_TEST_MODE),
       },
     };
 
@@ -248,7 +321,7 @@ app.post('/api/payment/verify-payment', async (req: Request, res: Response) => {
       });
     }
 
-    // 1. HMAC SHA-256 Signature Verification (Razorpay Standard)
+    // 1. HMAC SHA-256 Signature Verification (Razorpay Official Standard: order_id + "|" + payment_id)
     let signatureVerified = false;
     if (signature && RAZORPAY_KEY_SECRET) {
       try {
@@ -257,13 +330,28 @@ app.post('/api/payment/verify-payment', async (req: Request, res: Response) => {
           .update(`${orderId}|${paymentId}`)
           .digest('hex');
 
-        signatureVerified = expectedSignature === signature;
+        // Timing-safe buffer comparison to prevent timing attacks
+        const expectedBuf = Buffer.from(expectedSignature, 'utf8');
+        const incomingBuf = Buffer.from(signature, 'utf8');
+        if (expectedBuf.length === incomingBuf.length && crypto.timingSafeEqual(expectedBuf, incomingBuf)) {
+          signatureVerified = true;
+        }
       } catch (err) {
         console.warn('HMAC calculation error:', err);
       }
     }
 
-    // 2. Direct API Check against Razorpay Server
+    if (!signatureVerified) {
+      console.warn('Razorpay signature mismatch for order:', orderId);
+      return res.status(400).json({
+        success: false,
+        verified: false,
+        error: 'Invalid signature',
+        message: 'Payment verification failed. Razorpay signature mismatch.',
+      });
+    }
+
+    // 2. Direct API Check against Razorpay Server for double authorization
     const authHeader = `Basic ${Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString('base64')}`;
     const paymentRes = await fetch(`${RAZORPAY_BASE_URL}/payments/${encodeURIComponent(paymentId)}`, {
       method: 'GET',
@@ -287,8 +375,8 @@ app.post('/api/payment/verify-payment', async (req: Request, res: Response) => {
     const isPaymentCaptured = paymentData.status === 'captured' || paymentData.status === 'authorized';
     const matchesOrder = paymentData.order_id === orderId;
 
-    // Strict Backend Check: ONLY unlock when verified by signature and Razorpay payment status is captured/authorized
-    if ((signatureVerified || isPaymentCaptured) && matchesOrder) {
+    // Strict Backend Check: ONLY unlock when HMAC signature is verified AND payment belongs to this order AND status is captured/authorized
+    if (signatureVerified && isPaymentCaptured && matchesOrder) {
       verifiedOrders.set(orderId, {
         orderId,
         paymentId,
