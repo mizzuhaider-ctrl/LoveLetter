@@ -57,19 +57,30 @@ export async function getPhotoFromIDB(key: string): Promise<string | null> {
   }
 }
 
-export function generatePermanentSlug(yourName: string, recipientName: string, id: string): string {
-  const sanitize = (str: string) =>
-    (str || '')
+export function generatePermanentSlug(yourName?: string, recipientName?: string, id?: string): string {
+  const sanitize = (str?: string, fallback = 'love'): string => {
+    if (!str || str === 'undefined' || str === 'null') return fallback;
+    const cleaned = str
       .toLowerCase()
       .trim()
+      // Remove all emojis and non-standard symbols
+      .replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]|\p{Emoji}|\p{Extended_Pictographic}/gu, '')
+      // Replace any character not in a-z0-9 with a single hyphen
       .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '') || 'love';
+      // Strip leading and trailing hyphens
+      .replace(/^-+|-+$/g, '');
 
-  const sender = sanitize(yourName || 'me');
-  const receiver = sanitize(recipientName || 'you');
-  const shortId = (id || generateUniqueId()).slice(0, 4).toLowerCase();
+    return cleaned || fallback;
+  };
 
-  return `${sender}-${receiver}-${shortId}`;
+  const sender = sanitize(yourName, 'me');
+  const receiver = sanitize(recipientName, 'you');
+  // Sanitize the ID as well to guarantee no non-alphanumeric chars
+  const rawId = (id || generateUniqueId()).replace(/[^a-zA-Z0-9]/g, '').slice(0, 6).toLowerCase();
+  const shortId = rawId || generateUniqueId().slice(0, 4);
+
+  const fullSlug = `${sender}-${receiver}-${shortId}`.replace(/-+/g, '-').replace(/^-+|-+$/g, '');
+  return fullSlug;
 }
 
 export function saveProposal(proposal: LoveProposal): void {
@@ -145,6 +156,46 @@ export function getRecentProposal(): LoveProposal | null {
 }
 
 /**
+ * Helper to safely convert UTF-8 string to Base64 in all browsers
+ */
+function utf8ToBase64(str: string): string {
+  try {
+    if (typeof TextEncoder !== 'undefined') {
+      const bytes = new TextEncoder().encode(str);
+      const binString = Array.from(bytes, (byte) => String.fromCharCode(byte)).join('');
+      return btoa(binString);
+    }
+    return btoa(unescape(encodeURIComponent(str)));
+  } catch {
+    try {
+      return btoa(unescape(encodeURIComponent(str)));
+    } catch {
+      return '';
+    }
+  }
+}
+
+/**
+ * Helper to safely convert Base64 back to UTF-8 string in all browsers
+ */
+function base64ToUtf8(base64: string): string {
+  try {
+    const binString = atob(base64);
+    if (typeof TextDecoder !== 'undefined') {
+      const bytes = Uint8Array.from(binString, (m) => m.charCodeAt(0));
+      return new TextDecoder().decode(bytes);
+    }
+    return decodeURIComponent(escape(binString));
+  } catch {
+    try {
+      return decodeURIComponent(escape(atob(base64)));
+    } catch {
+      return '';
+    }
+  }
+}
+
+/**
  * Packs lightweight proposal data into URL hash or param for universal instant sharing
  * even across different browsers or devices when backend DB is not configured.
  */
@@ -162,7 +213,9 @@ export function encodeProposalToPayload(proposal: LoveProposal): string {
       // If photoUrl is small (dataUrl < 100KB) or external url, include it
       p: proposal.photoUrl && proposal.photoUrl.length < 150000 ? proposal.photoUrl : undefined,
     };
-    return encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(payload)))));
+    const jsonStr = JSON.stringify(payload);
+    const b64 = utf8ToBase64(jsonStr);
+    return b64 ? encodeURIComponent(b64) : '';
   } catch (err) {
     console.warn('Encoding error', err);
     return '';
@@ -171,7 +224,10 @@ export function encodeProposalToPayload(proposal: LoveProposal): string {
 
 export function decodeProposalFromPayload(payloadStr: string): Partial<LoveProposal> | null {
   try {
-    const decodedStr = decodeURIComponent(escape(atob(decodeURIComponent(payloadStr))));
+    if (!payloadStr) return null;
+    const cleanB64 = decodeURIComponent(payloadStr);
+    const decodedStr = base64ToUtf8(cleanB64);
+    if (!decodedStr) return null;
     const parsed = JSON.parse(decodedStr);
     return {
       id: parsed.i,

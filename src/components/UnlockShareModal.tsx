@@ -174,7 +174,10 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
     try {
       const res = await fetch('/api/payment/free-test-unlock', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
         body: JSON.stringify({
           proposalId: proposal.id,
           yourName: proposal.yourName,
@@ -182,12 +185,31 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
         }),
       });
 
-      const data = await res.json();
+      // Safely parse JSON response to prevent Safari "The string did not match the expected pattern."
+      let data: any = null;
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        try {
+          data = await res.json();
+        } catch (jsonErr) {
+          console.warn('JSON parsing error:', jsonErr);
+        }
+      } else {
+        const rawText = await res.text();
+        try {
+          data = JSON.parse(rawText);
+        } catch {
+          console.warn('Server returned non-JSON response:', rawText.slice(0, 100));
+        }
+      }
 
-      if (res.ok && data.success && data.verified) {
-        // 1. Generate permanent unique slug such as: mezan-aisha-x7k2
-        const permanentSlug =
-          proposal.slug || generatePermanentSlug(proposal.yourName, proposal.recipientName, proposal.id);
+      if (res.ok && data && data.success && data.verified) {
+        // 1. Generate strictly sanitized permanent slug (a-z, 0-9, hyphen only)
+        const permanentSlug = generatePermanentSlug(
+          proposal.yourName,
+          proposal.recipientName,
+          proposal.slug || proposal.id
+        );
 
         // 2. Save user's personalized LoveLetter data with unlocked status
         const unlockedProposal: LoveProposal = {
@@ -209,7 +231,10 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
         setStep('success');
       } else {
         setPaymentStatus('failed');
-        setErrorMessage(data.message || 'Free test authorization could not be completed.');
+        const fallbackMsg = !res.ok
+          ? `Server returned HTTP ${res.status}: ${res.statusText || 'Endpoint unavailable'}`
+          : 'Free test authorization could not be completed.';
+        setErrorMessage(data?.message || data?.error || fallbackMsg);
       }
     } catch (err: any) {
       console.error('Free test unlock error:', err);
