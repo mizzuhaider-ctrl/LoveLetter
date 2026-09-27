@@ -1,5 +1,7 @@
 export type QuestionChoice = 'gf' | 'forever' | 'love' | 'custom';
 
+export type MusicLanguage = 'hindi' | 'english';
+
 export interface LoveProposal {
   id: string;
   recipientName: string;
@@ -9,6 +11,7 @@ export interface LoveProposal {
   message: string;
   photoUrl?: string;
   songTitle?: string;
+  musicLanguage?: MusicLanguage;
   createdAt: number;
   isUnlocked?: boolean;
   slug?: string;

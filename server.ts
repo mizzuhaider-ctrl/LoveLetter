@@ -63,6 +63,8 @@ app.get('/api/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok' });
 });
 
+
+
 // Razorpay Payment Public Config (Never exposes secret key)
 app.get('/api/payment/config', (_req: Request, res: Response) => {
   res.json({
@@ -111,6 +113,9 @@ app.post('/api/payment/free-test-unlock', async (req: Request, res: Response) =>
       verified: true,
       orderId,
       paymentId,
+      proposalId: proposalId || '',
+      creator: yourName || '',
+      recipient: recipientName || '',
       mode: 'FREE_TEST_MODE',
       message: 'FREE TEST MODE — No real payment was made. Test authorization verified.',
     });
@@ -414,6 +419,12 @@ app.post('/api/payment/verify-payment', async (req: Request, res: Response) => {
 // -------------------------------------------------------------
 // VITE MIDDLEWARE / STATIC ASSETS
 // -------------------------------------------------------------
+// Long-term cache headers for static public assets (cat gif, mp3 audio, etc.)
+app.use('/assets', (req, res, next) => {
+  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  next();
+});
+
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
@@ -423,7 +434,17 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
+    app.use(express.static(distPath, {
+      maxAge: '1y',
+      immutable: true,
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.html')) {
+          res.setHeader('Cache-Control', 'no-cache');
+        } else {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        }
+      }
+    }));
     app.get('*', (_req: Request, res: Response) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });

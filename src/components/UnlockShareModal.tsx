@@ -185,26 +185,19 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
         }),
       });
 
-      // Safely parse JSON response to prevent Safari "The string did not match the expected pattern."
+      // Safely parse text and JSON to avoid Safari WebKit DOMExceptions
       let data: any = null;
-      const contentType = res.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
-        try {
-          data = await res.json();
-        } catch (jsonErr) {
-          console.warn('JSON parsing error:', jsonErr);
-        }
-      } else {
+      try {
         const rawText = await res.text();
-        try {
+        if (rawText && rawText.trim().length > 0) {
           data = JSON.parse(rawText);
-        } catch {
-          console.warn('Server returned non-JSON response:', rawText.slice(0, 100));
         }
+      } catch (parseErr) {
+        console.warn('Response parsing note:', parseErr);
       }
 
-      if (res.ok && data && data.success && data.verified) {
-        // 1. Generate strictly sanitized permanent slug (a-z, 0-9, hyphen only)
+      if (res.ok && data && (data.verified === true || data.success === true)) {
+        // 1. Generate strictly sanitized permanent slug (only [a-z0-9-])
         const permanentSlug = generatePermanentSlug(
           proposal.yourName,
           proposal.recipientName,
@@ -221,7 +214,7 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
         onUnlocked(unlockedProposal);
 
         // 3. Construct permanent shareable link
-        const origin = window.location.origin;
+        const origin = typeof window !== 'undefined' ? window.location.origin : '';
         const payload = encodeProposalToPayload(unlockedProposal);
         const permanentLink = `${origin}/love/${permanentSlug}${payload ? `#${payload}` : ''}`;
         setShareableUrl(permanentLink);
@@ -368,7 +361,7 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
 
       // STRICT BACKEND VERIFICATION CHECK
       if (verifyData.success && verifyData.verified) {
-        // 1. Generate permanent unique slug such as: mezan-aisha-x7k2
+        // 1. Generate permanent unique anonymous slug such as: loveletter-x7k2
         const permanentSlug = proposal.slug || generatePermanentSlug(proposal.yourName, proposal.recipientName, proposal.id);
 
         // 2. Save user's personalized LoveLetter data with unlocked status
@@ -381,7 +374,7 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
         onUnlocked(unlockedProposal);
 
         // 3. Construct permanent shareable link
-        const origin = window.location.origin;
+        const origin = typeof window !== 'undefined' ? window.location.origin : '';
         const payload = encodeProposalToPayload(unlockedProposal);
         const permanentLink = `${origin}/love/${permanentSlug}${payload ? `#${payload}` : ''}`;
         setShareableUrl(permanentLink);
@@ -423,6 +416,7 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
       setTimeout(() => setCopied(false), 2500);
     }
   };
+
 
   const handleWhatsAppShare = () => {
     const text = `Someone made something special for you ❤️\nOpen this:\n${shareableUrl}`;

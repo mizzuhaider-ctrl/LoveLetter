@@ -13,16 +13,14 @@ export default function handler(req: any, res: any) {
   const isConfigured = Boolean(keyId && keySecret);
 
   return res.status(200).json({
-    freeTestMode: true,
-    isConfigured: true,
-    gateway: 'simulator',
+    freeTestMode: false,
+    isConfigured: isConfigured,
     keyId: keyId,
     currency: 'INR',
-    price: 0,
-    displayPrice: 0,
-    testMode: true,
-    simulatedTestAmount: 1,
-    amountInPaise: 100,
-    planName: 'PREMIUM (FREE TEST MODE)',
+    price: 99,
+    displayPrice: 99,
+    testMode: false,
+    amountInPaise: 9900,
+    planName: 'PREMIUM',
   });
 }

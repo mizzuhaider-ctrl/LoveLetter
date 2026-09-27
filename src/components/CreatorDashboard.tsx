@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Heart, Sparkles, AlertCircle } from 'lucide-react';
-import { LoveProposal, QuestionChoice, LegalPageType } from '../types';
+import { Heart, Sparkles, AlertCircle, X } from 'lucide-react';
+import { LoveProposal, QuestionChoice, LegalPageType, MusicLanguage } from '../types';
+import { setMusicLanguage } from '../utils/audioController';
 import { CouplePhotoUpload } from './CouplePhotoUpload';
 import { AudioPlayer } from './AudioPlayer';
 import { Footer } from './Footer';
@@ -36,6 +37,9 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = React.memo(({
   const [customQuestion, setCustomQuestion] = useState(initialData.customQuestion || '');
   const [message, setMessage] = useState(initialData.message);
   const [photoUrl, setPhotoUrl] = useState<string | undefined>(initialData.photoUrl);
+  const [musicLanguage, setMusicLanguageState] = useState<MusicLanguage>(
+    initialData.musicLanguage || 'hindi'
+  );
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Track if music has been triggered so we only start on the first character typed
@@ -48,6 +52,13 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = React.memo(({
     }
   }, [initialData.photoUrl]);
 
+  // Sync musicLanguage if initialData changes
+  useEffect(() => {
+    if (initialData.musicLanguage) {
+      setMusicLanguageState(initialData.musicLanguage);
+    }
+  }, [initialData.musicLanguage]);
+
   const handleRecipientNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const nextVal = e.target.value;
     setRecipientName(nextVal);
@@ -57,6 +68,15 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = React.memo(({
     if (!hasTriggeredMusicRef.current && nextVal.trim().length > 0 && !getIsPlaying()) {
       hasTriggeredMusicRef.current = true;
       attemptPlay();
+    }
+  };
+
+
+  const handleSelectMusicLanguage = (lang: MusicLanguage) => {
+    setMusicLanguageState(lang);
+    setMusicLanguage(lang);
+    if (onUpdateDraft) {
+      onUpdateDraft({ musicLanguage: lang });
     }
   };
 
@@ -95,10 +115,12 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = React.memo(({
       customQuestion: customQuestion.trim(),
       message: message.trim() || "You're the most beautiful person I know. I love you endlessly. 💕",
       photoUrl,
+      musicLanguage,
     };
 
     onPreview(updatedProposal);
   };
+
 
   return (
     <div className="min-h-screen bg-[#FFF9F9] flex flex-col justify-between items-center relative">
@@ -248,6 +270,9 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = React.memo(({
             )}
           </div>
 
+
+
+
           {/* Your Message */}
           <div className="space-y-1.5">
             <label
@@ -283,6 +308,7 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = React.memo(({
         </form>
         </div>
       </div>
+
 
       {/* Website Footer with Contact Us, Privacy, Terms, and Refund */}
       <Footer onNavigateLegal={onNavigateLegal} />

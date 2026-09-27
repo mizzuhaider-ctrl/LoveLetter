@@ -2,7 +2,8 @@ import React, { useEffect } from 'react';
 import { LoveProposal } from '../types';
 import { FloatingParticles } from './FloatingParticles';
 import { AudioPlayer } from './AudioPlayer';
-import { Sparkles } from 'lucide-react';
+import { setMusicLanguage } from '../utils/audioController';
+import { Sparkles, Check } from 'lucide-react';
 import { generatePermanentSlug, encodeProposalToPayload } from '../utils/storage';
 import { PAYMENT_CONFIG, getDisplayPrice } from '../config/payment';
 
@@ -42,6 +43,12 @@ export const CelebrationPage: React.FC<CelebrationPageProps> = React.memo(({
     }
   }, []);
 
+  // Ensure selected romantic music continues through celebration
+  useEffect(() => {
+    const lang = proposal.musicLanguage || 'hindi';
+    setMusicLanguage(lang);
+  }, [proposal.musicLanguage]);
+
   const [copied, setCopied] = React.useState(false);
 
   const getShareUrl = () => {
@@ -75,6 +82,7 @@ export const CelebrationPage: React.FC<CelebrationPageProps> = React.memo(({
       setTimeout(() => setCopied(false), 2000);
     }
   };
+
 
   const handleWhatsAppShare = () => {
     const url = getShareUrl();
@@ -129,13 +137,17 @@ export const CelebrationPage: React.FC<CelebrationPageProps> = React.memo(({
           src="/assets/cat-kisses-camera.gif"
           alt="Cute cat kisses camera"
           loading="eager"
-          decoding="async"
+          // @ts-expect-error fetchPriority attribute is supported by modern browsers / React
+          fetchPriority="high"
           style={{
             display: "block",
             width: "min(534px, 85vw)",
             height: "auto",
             margin: "24px auto",
-            objectFit: "contain"
+            objectFit: "contain",
+            transform: "translateZ(0)",
+            willChange: "transform",
+            backfaceVisibility: "hidden"
           }}
         />
 
@@ -267,6 +279,8 @@ export const CelebrationPage: React.FC<CelebrationPageProps> = React.memo(({
               >
                 <span>SHARE ON WHATSAPP 💚</span>
               </button>
+
+
 
               <button
                 type="button"

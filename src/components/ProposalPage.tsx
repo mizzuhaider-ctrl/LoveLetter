@@ -2,7 +2,7 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { LoveProposal } from '../types';
 import { FloatingParticles } from './FloatingParticles';
 import { AudioPlayer } from './AudioPlayer';
-import { attemptPlay, getIsAudioStarted } from '../utils/audioController';
+import { attemptPlay, getIsAudioStarted, setMusicLanguage, getTrackUrlForLanguage } from '../utils/audioController';
 
 interface ProposalPageProps {
   proposal: LoveProposal;
@@ -52,6 +52,8 @@ export const ProposalPage: React.FC<ProposalPageProps> = React.memo(({
   const [noPos, setNoPos] = useState<{ x: number; y: number } | null>(null);
   const [noAttempts, setNoAttempts] = useState(0);
   const [currentMessage, setCurrentMessage] = useState<string>('');
+  const [isLetterOpened, setIsLetterOpened] = useState<boolean>(() => getIsAudioStarted());
+
   
   const containerRef = useRef<HTMLDivElement | null>(null);
   const spacerRef = useRef<HTMLDivElement | null>(null);
@@ -78,6 +80,13 @@ export const ProposalPage: React.FC<ProposalPageProps> = React.memo(({
     };
   }, []);
 
+
+  // Sync the audio track to the creator's saved musicLanguage choice
+  useEffect(() => {
+    const lang = proposal.musicLanguage || 'hindi';
+    setMusicLanguage(lang);
+  }, [proposal.musicLanguage]);
+
   // Initialize position and reset state on mount or navigation; prefetch celebration asset
   useEffect(() => {
     setCurrentMessage('');
@@ -91,10 +100,13 @@ export const ProposalPage: React.FC<ProposalPageProps> = React.memo(({
       hintEl.remove();
     }
 
-    // Warm celebration image cache off main thread so YES -> celebration is instantaneous
+    // Keep the cat GIF preloaded and decoded in memory before YES is clicked
     if (typeof window !== 'undefined') {
-      const prefetchImg = new Image();
-      prefetchImg.src = '/assets/cat-kisses-camera.gif';
+      const img = new Image();
+      img.src = '/assets/cat-kisses-camera.gif';
+      if ('decode' in img) {
+        img.decode().catch(() => {});
+      }
     }
   }, [getInitialButtonPos]);
 
@@ -314,7 +326,9 @@ export const ProposalPage: React.FC<ProposalPageProps> = React.memo(({
       }
       lastInteractionTimeRef.current = now;
 
-      attemptPlay();
+      const targetUrl = getTrackUrlForLanguage(proposal.musicLanguage || 'hindi');
+      attemptPlay(targetUrl);
+      setIsLetterOpened(true);
 
       setNoAttempts((prev) => {
         const next = prev + 1;
@@ -355,9 +369,20 @@ export const ProposalPage: React.FC<ProposalPageProps> = React.memo(({
     return () => window.removeEventListener('resize', handleResize);
   }, [hasMoved, noPos, getInitialButtonPos]);
 
+
+  const handleOpenMyLetter = useCallback(() => {
+    setIsLetterOpened(true);
+    const targetUrl = getTrackUrlForLanguage(proposal.musicLanguage || 'hindi');
+    attemptPlay(targetUrl);
+  }, [proposal.musicLanguage]);
+
   const handleYesClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    attemptPlay();
+    const lang = proposal.musicLanguage || 'hindi';
+    setMusicLanguage(lang);
+    const targetUrl = getTrackUrlForLanguage(lang);
+    attemptPlay(targetUrl);
+    setIsLetterOpened(true);
     // Immediately clear and reset NO-attempt message and state
     setCurrentMessage('');
     setNoAttempts(0);
@@ -458,25 +483,28 @@ export const ProposalPage: React.FC<ProposalPageProps> = React.memo(({
           </span>
         </div>
 
-        {/* From Sender Name / Letter seal */}
-        <div className="mb-6 sm:mb-8">
-          <button
-            type="button"
-            id="proposal-sender-name"
-            onClick={() => attemptPlay()}
-            className="text-xs sm:text-sm font-medium text-white/90 drop-shadow-sm inline-flex items-center gap-1 bg-black/15 px-3.5 py-1 rounded-full backdrop-blur-sm border border-white/20 cursor-pointer active:scale-95 transition"
-          >
-            From: {proposal.yourName} 💌
-          </button>
-          <button
-            type="button"
-            id="open-my-letter-btn"
-            onClick={() => attemptPlay()}
-            aria-label="OPEN MY LETTER 💌"
-            className="sr-only"
-          >
-            OPEN MY LETTER 💌
-          </button>
+        {/* From Sender Name / Letter seal & Opening Prompt */}
+        <div className="mb-6 sm:mb-8 flex flex-col items-center gap-3">
+          <div className="text-xs sm:text-sm font-medium text-white/90 drop-shadow-sm inline-flex items-center gap-1 bg-black/15 px-3.5 py-1 rounded-full backdrop-blur-sm border border-white/20">
+            From: {proposal.yourName || 'Someone who loves you'} 💌
+          </div>
+
+          {/* Prominent OPEN MY LETTER 💌 interaction if recipient has not yet started audio */}
+          {!isLetterOpened && (
+            <div className="flex flex-col items-center gap-2 animate-fade-in my-1">
+              <p className="text-xs sm:text-sm text-white/95 font-medium drop-shadow-sm italic">
+                Someone has a little question for you…
+              </p>
+              <button
+                type="button"
+                id="open-my-letter-btn"
+                onClick={handleOpenMyLetter}
+                className="py-3 px-6 rounded-full bg-white text-rose-600 font-extrabold text-sm sm:text-base shadow-[0_6px_22px_rgba(0,0,0,0.2)] hover:bg-rose-50 active:scale-95 transition-all duration-200 cursor-pointer flex items-center gap-2 border-2 border-white animate-gentle-pulse"
+              >
+                <span>OPEN MY LETTER 💌</span>
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Initial NO button position in content center */}

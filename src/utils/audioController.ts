@@ -85,10 +85,8 @@ export function applyHindiCrossfadeTransition(
   return baseVolume * blendFactor;
 }
 
-let activeTrackUrl =
-  typeof window !== 'undefined' && localStorage.getItem('selectedMusic') === 'hindi'
-    ? '/assets/Ishq_Wala_Love_smooth_cut.mp3'
-    : '/assets/i-think-they-call-this-love.mp3';
+// Default active track is Hindi Song ('/assets/Ishq_Wala_Love_smooth_cut.mp3') as safe fallback
+let activeTrackUrl = '/assets/Ishq_Wala_Love_smooth_cut.mp3';
 
 let detectedTracks: AudioTrackConfig = {
   english: '/assets/i-think-they-call-this-love.mp3',
@@ -127,6 +125,19 @@ export async function detectAudioTracks(): Promise<AudioTrackConfig> {
   return detectedTracks;
 }
 
+
+export function getTrackUrlForLanguage(lang?: 'hindi' | 'english'): string {
+  if (lang === 'english') {
+    return detectedTracks.english || '/assets/i-think-they-call-this-love.mp3';
+  }
+  return detectedTracks.hindi || '/assets/Ishq_Wala_Love_smooth_cut.mp3';
+}
+
+export function setMusicLanguage(lang?: 'hindi' | 'english'): void {
+  const target = getTrackUrlForLanguage(lang);
+  setAudioTrack(target);
+}
+
 export function getDetectedTracks(): AudioTrackConfig {
   return detectedTracks;
 }
@@ -136,30 +147,26 @@ export function getCurrentTrack(): string {
 }
 
 function isSameSrc(audioSrc: string, targetPath: string): boolean {
-  if (!audioSrc) return false;
+  if (!audioSrc || !targetPath) return false;
   try {
-    const currentPath = new URL(audioSrc, window.location.origin).pathname;
-    return currentPath === targetPath;
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost';
+    const currentPath = new URL(audioSrc, origin).pathname;
+    const target = new URL(targetPath, origin).pathname;
+    return currentPath === target;
   } catch {
-    return audioSrc.endsWith(targetPath);
+    return audioSrc.endsWith(targetPath) || targetPath.endsWith(audioSrc);
   }
 }
 
 export function setAudioTrack(trackUrl: string): void {
+  if (!trackUrl) return;
+  const previousTrack = activeTrackUrl;
   activeTrackUrl = trackUrl;
-  if (trackUrl.includes('Ishq_Wala_Love')) {
-    try {
-      localStorage.setItem('selectedMusic', 'hindi');
-    } catch {}
-  } else if (trackUrl.includes('i-think-they-call-this-love')) {
-    try {
-      localStorage.setItem('selectedMusic', 'english');
-    } catch {}
-  }
 
   if (audioElement) {
-    const wasPlaying = !audioElement.paused;
+    // Only load and switch if the track URL is actually different
     if (!isSameSrc(audioElement.src, trackUrl)) {
+      const wasPlaying = !audioElement.paused;
       audioElement.src = trackUrl;
       audioElement.load();
       if (wasPlaying) {
@@ -205,8 +212,12 @@ export function initBackgroundMusic(trackUrl?: string): HTMLAudioElement | null 
       }
     });
   } else if (!isSameSrc(audioElement.src, activeTrackUrl)) {
+    const wasPlaying = !audioElement.paused;
     audioElement.src = activeTrackUrl;
     audioElement.load();
+    if (wasPlaying) {
+      audioElement.play().catch((e) => console.warn('Track reload play error', e));
+    }
   }
 
   return audioElement;
@@ -239,6 +250,22 @@ export function getIsBlocked(): boolean {
  */
 export function attemptPlay(trackUrl?: string): Promise<boolean> {
   const targetUrl = trackUrl || activeTrackUrl;
+
+  // If already playing the requested track smoothly, DO NOT re-trigger load() or play()
+  if (audioElement && !audioElement.paused && isSameSrc(audioElement.src, targetUrl)) {
+    hasAudioStarted = true;
+    isAutoplayBlocked = false;
+    if (isMuted) {
+      audioElement.volume = 0;
+      audioElement.muted = true;
+    } else {
+      audioElement.muted = false;
+      audioElement.volume = 0.7;
+    }
+    notifyListeners();
+    return Promise.resolve(true);
+  }
+
   if (targetUrl) {
     setAudioTrack(targetUrl);
   }

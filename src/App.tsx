@@ -17,16 +17,28 @@ import { CreatorDashboard } from './components/CreatorDashboard';
 import { ProposalPage } from './components/ProposalPage';
 import { CelebrationPage } from './components/CelebrationPage';
 import { UnlockShareModal } from './components/UnlockShareModal';
-import { LegalPage } from './components/LegalPage';
 import { MusicSelectionModal } from './components/MusicSelectionModal';
-import { attemptPlay } from './utils/audioController';
+import { LegalPage } from './components/LegalPage';
+
+import { attemptPlay, setMusicLanguage } from './utils/audioController';
 
 export default function App() {
   // Check if current URL is a recipient share link
   const [isRecipientRoute, setIsRecipientRoute] = useState(false);
-  const [isMusicModalOpen, setIsMusicModalOpen] = useState(true);
+
   const [viewState, setViewState] = useState<ViewState>('creator');
   const [isUnlockModalOpen, setIsUnlockModalOpen] = useState(false);
+  const [isMusicModalOpen, setIsMusicModalOpen] = useState(true);
+
+  const handleSelectMusic = useCallback((lang: 'hindi' | 'english') => {
+    setProposal((prev) => {
+      const updated = { ...prev, musicLanguage: lang };
+      saveProposal(updated);
+      return updated;
+    });
+    setMusicLanguage(lang);
+    setIsMusicModalOpen(false);
+  }, []);
   const [legalView, setLegalView] = useState<LegalPageType | null>(() => {
     if (typeof window === 'undefined') return null;
     const path = window.location.pathname.toLowerCase();
@@ -48,6 +60,7 @@ export default function App() {
     questionChoice: 'gf',
     customQuestion: '',
     message: '',
+    musicLanguage: 'hindi',
     createdAt: Date.now(),
   }));
 
@@ -107,6 +120,9 @@ export default function App() {
         const payloadStr = hash.replace(/^#/, '');
         const decoded = decodeProposalFromPayload(payloadStr);
         if (decoded && decoded.recipientName) {
+          const lang = decoded.musicLanguage || 'hindi';
+          setMusicLanguage(lang);
+          setIsMusicModalOpen(false);
           setProposal((prev) => ({
             ...prev,
             ...decoded,
@@ -119,15 +135,20 @@ export default function App() {
         }
       }
 
-      // 2. Try to get from localStorage by ID or slug
+      // 2. Try to get from localStorage or server API by ID or slug
       if (proposalIdentifier) {
         const stored = getProposal(proposalIdentifier);
         if (stored) {
+          const lang = stored.musicLanguage || 'hindi';
+          setMusicLanguage(lang);
+          setIsMusicModalOpen(false);
           setProposal(stored);
           setIsRecipientRoute(true);
           setViewState('proposal');
           return;
         }
+
+
       }
 
       // 3. If query params have recipient name
@@ -156,6 +177,7 @@ export default function App() {
           yourName: prev.yourName || 'Someone who loves you',
           questionChoice: 'gf',
           message: prev.message || "You're the most beautiful person I know. I love you endlessly. 💕",
+          musicLanguage: prev.musicLanguage || 'hindi',
         }));
       }
 
@@ -264,12 +286,21 @@ export default function App() {
   }, []);
 
   // Test recipient view
-  const handleViewAsRecipient = useCallback((_shareUrl?: string) => {
+  const handleViewAsRecipient = useCallback((shareUrl?: string) => {
     setIsUnlockModalOpen(false);
     setIsRecipientRoute(true);
     setViewState('proposal');
     if (typeof window !== 'undefined') {
-      window.history.pushState({}, '', '/love');
+      if (shareUrl) {
+        try {
+          const u = new URL(shareUrl, window.location.origin);
+          window.history.pushState({}, '', u.pathname + u.search + u.hash);
+        } catch {
+          window.history.pushState({}, '', '/love');
+        }
+      } else {
+        window.history.pushState({}, '', '/love');
+      }
     }
   }, []);
 
@@ -327,11 +358,14 @@ export default function App() {
         onViewAsRecipient={handleViewAsRecipient}
       />
 
-      {/* Centered Startup Music Selection Modal */}
+      {/* ORIGINAL MUSIC SELECTION POPUP */}
       <MusicSelectionModal
         isOpen={isMusicModalOpen}
-        onSelectMusic={() => setIsMusicModalOpen(false)}
+        onSelectMusic={handleSelectMusic}
       />
+
+
+
     </div>
   );
 }

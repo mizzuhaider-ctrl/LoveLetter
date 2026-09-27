@@ -58,29 +58,23 @@ export async function getPhotoFromIDB(key: string): Promise<string | null> {
 }
 
 export function generatePermanentSlug(yourName?: string, recipientName?: string, id?: string): string {
-  const sanitize = (str?: string, fallback = 'love'): string => {
-    if (!str || str === 'undefined' || str === 'null') return fallback;
-    const cleaned = str
-      .toLowerCase()
-      .trim()
-      // Remove all emojis and non-standard symbols
-      .replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]|\p{Emoji}|\p{Extended_Pictographic}/gu, '')
-      // Replace any character not in a-z0-9 with a single hyphen
-      .replace(/[^a-z0-9]+/g, '-')
-      // Strip leading and trailing hyphens
-      .replace(/^-+|-+$/g, '');
-
-    return cleaned || fallback;
+  const sanitize = (name?: string, fallback: string = 'love') => {
+    if (!name || name === 'undefined' || name === 'null') return fallback;
+    return (
+      name
+        .toLowerCase()
+        .trim()
+        .replace(new RegExp('[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|\\p{Emoji}|\\p{Extended_Pictographic}', 'gu'), '')
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '') || fallback
+    );
   };
 
-  const sender = sanitize(yourName, 'me');
-  const receiver = sanitize(recipientName, 'you');
-  // Sanitize the ID as well to guarantee no non-alphanumeric chars
-  const rawId = (id || generateUniqueId()).replace(/[^a-zA-Z0-9]/g, '').slice(0, 6).toLowerCase();
-  const shortId = rawId || generateUniqueId().slice(0, 4);
+  const yClean = sanitize(yourName, 'me');
+  const rClean = sanitize(recipientName, 'you');
+  const cleanId = (id || generateUniqueId()).replace(/[^a-zA-Z0-9]/g, '').slice(0, 6).toLowerCase() || generateUniqueId().slice(0, 4);
 
-  const fullSlug = `${sender}-${receiver}-${shortId}`.replace(/-+/g, '-').replace(/^-+|-+$/g, '');
-  return fullSlug;
+  return `${yClean}-${rClean}-${cleanId}`.replace(/-+/g, '-').replace(/^-+|-+$/g, '');
 }
 
 export function saveProposal(proposal: LoveProposal): void {
@@ -119,6 +113,8 @@ export function saveProposal(proposal: LoveProposal): void {
     }
     persistPhotoToIDB('recent_photo', proposal.photoUrl).catch(() => {});
   }
+
+
 }
 
 export function getProposal(id: string): LoveProposal | null {
@@ -210,6 +206,7 @@ export function encodeProposalToPayload(proposal: LoveProposal): string {
       m: proposal.message,
       s: proposal.slug,
       u: proposal.isUnlocked ? 1 : 0,
+      ml: proposal.musicLanguage || 'hindi',
       // If photoUrl is small (dataUrl < 100KB) or external url, include it
       p: proposal.photoUrl && proposal.photoUrl.length < 150000 ? proposal.photoUrl : undefined,
     };
@@ -238,6 +235,7 @@ export function decodeProposalFromPayload(payloadStr: string): Partial<LovePropo
       message: parsed.m || '',
       slug: parsed.s,
       isUnlocked: parsed.u === 1,
+      musicLanguage: parsed.ml === 'english' ? 'english' : 'hindi',
       photoUrl: parsed.p,
       createdAt: Date.now(),
     };
