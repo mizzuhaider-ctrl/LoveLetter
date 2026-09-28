@@ -14,10 +14,10 @@ export const PAYMENT_CONFIG = {
    * Set to `true` to test and share LoveLetter pages completely FREE without Razorpay onboarding/keys.
    * Set to `false` to enable the full Razorpay payment gateway.
    */
-  FREE_TEST_MODE: false,
+  FREE_TEST_MODE: true,
 
   /** Razorpay Test Mode toggle (used when FREE_TEST_MODE is false) */
-  PAYMENT_TEST_MODE: false,
+  PAYMENT_TEST_MODE: true,
 
   /** Display price when in test mode (₹0) */
   DISPLAY_PRICE_TEST: 0,

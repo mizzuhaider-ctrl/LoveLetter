@@ -4,6 +4,8 @@ import {
   saveProposal,
   encodeProposalToPayload,
   generatePermanentSlug,
+  formatVercelShareUrl,
+  VERCEL_PRODUCTION_ORIGIN,
 } from '../utils/storage';
 import {
   X,
@@ -102,6 +104,7 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
     proposal.isUnlocked ? 'success' : 'plan'
   );
   const [copied, setCopied] = useState(false);
+  const [instagramMessage, setInstagramMessage] = useState(false);
   const [paymentStatus, setPaymentStatus] = useState<PaymentStatusState>('idle');
   const [paymentConfig, setPaymentConfig] = useState<PaymentConfig | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -117,10 +120,11 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
   const currentDisplayPrice = paymentConfig?.displayPrice ?? getDisplayPrice(isTestMode, isFreeTestMode);
 
   const [shareableUrl, setShareableUrl] = useState<string>(() => {
-    const origin = typeof window !== 'undefined' ? window.location.origin : '';
-    const slug = proposal.slug || generatePermanentSlug(proposal.yourName, proposal.recipientName, proposal.id);
+    const slug = proposal.slug && proposal.slug.startsWith('loveletter-')
+      ? proposal.slug
+      : generatePermanentSlug(proposal.yourName, proposal.recipientName, proposal.slug || proposal.id);
     const payload = encodeProposalToPayload(proposal);
-    return `${origin}/love/${slug}${payload ? `#${payload}` : ''}`;
+    return `${VERCEL_PRODUCTION_ORIGIN}/love/${slug}${payload ? `#${payload}` : ''}`;
   });
 
   // Fetch Razorpay payment config on modal open
@@ -148,10 +152,11 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
   useEffect(() => {
     if (proposal.isUnlocked) {
       setStep('success');
-      const origin = typeof window !== 'undefined' ? window.location.origin : '';
-      const slug = proposal.slug || generatePermanentSlug(proposal.yourName, proposal.recipientName, proposal.id);
+      const slug = proposal.slug && proposal.slug.startsWith('loveletter-')
+        ? proposal.slug
+        : generatePermanentSlug(proposal.yourName, proposal.recipientName, proposal.slug || proposal.id);
       const payload = encodeProposalToPayload(proposal);
-      setShareableUrl(`${origin}/love/${slug}${payload ? `#${payload}` : ''}`);
+      setShareableUrl(`${VERCEL_PRODUCTION_ORIGIN}/love/${slug}${payload ? `#${payload}` : ''}`);
     }
   }, [proposal.isUnlocked, proposal]);
 
@@ -214,9 +219,8 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
         onUnlocked(unlockedProposal);
 
         // 3. Construct permanent shareable link
-        const origin = typeof window !== 'undefined' ? window.location.origin : '';
         const payload = encodeProposalToPayload(unlockedProposal);
-        const permanentLink = `${origin}/love/${permanentSlug}${payload ? `#${payload}` : ''}`;
+        const permanentLink = `${VERCEL_PRODUCTION_ORIGIN}/love/${permanentSlug}${payload ? `#${payload}` : ''}`;
         setShareableUrl(permanentLink);
 
         // 4. Switch to success
@@ -362,7 +366,9 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
       // STRICT BACKEND VERIFICATION CHECK
       if (verifyData.success && verifyData.verified) {
         // 1. Generate permanent unique anonymous slug such as: loveletter-x7k2
-        const permanentSlug = proposal.slug || generatePermanentSlug(proposal.yourName, proposal.recipientName, proposal.id);
+        const permanentSlug = (proposal.slug && proposal.slug.startsWith('loveletter-'))
+          ? proposal.slug
+          : generatePermanentSlug(proposal.yourName, proposal.recipientName, proposal.slug || proposal.id);
 
         // 2. Save user's personalized LoveLetter data with unlocked status
         const unlockedProposal: LoveProposal = {
@@ -374,9 +380,8 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
         onUnlocked(unlockedProposal);
 
         // 3. Construct permanent shareable link
-        const origin = typeof window !== 'undefined' ? window.location.origin : '';
         const payload = encodeProposalToPayload(unlockedProposal);
-        const permanentLink = `${origin}/love/${permanentSlug}${payload ? `#${payload}` : ''}`;
+        const permanentLink = `${VERCEL_PRODUCTION_ORIGIN}/love/${permanentSlug}${payload ? `#${payload}` : ''}`;
         setShareableUrl(permanentLink);
 
         // 4. Switch to success
@@ -422,6 +427,30 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
     const text = `Someone made something special for you ❤️\nOpen this:\n${shareableUrl}`;
     const waUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
     window.open(waUrl, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleInstagramShare = async () => {
+    const instagramUrl = formatVercelShareUrl(shareableUrl);
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(instagramUrl);
+      } else {
+        const textArea = document.createElement('textarea');
+        textArea.value = instagramUrl;
+        textArea.style.position = 'fixed';
+        textArea.style.opacity = '0';
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+      }
+    } catch {
+      // fallback
+    }
+    setInstagramMessage(true);
+    setTimeout(() => setInstagramMessage(false), 4000);
+    // Open Instagram app or web
+    window.open('https://www.instagram.com/', '_blank', 'noopener,noreferrer');
   };
 
   const isActionDisabled =
@@ -703,7 +732,7 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
                 </div>
               </div>
 
-              {/* EXACT 3 REQUIRED ACTION BUTTONS */}
+              {/* EXACT REQUIRED ACTION BUTTONS */}
               <div className="space-y-2.5 pt-2">
                 {/* 1. COPY LINK 🔗 */}
                 <button
@@ -727,7 +756,25 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
                   <span>SHARE ON WHATSAPP 💚</span>
                 </button>
 
-                {/* 3. OPEN MY PAGE ❤️ */}
+                {/* 3. SHARE ON INSTAGRAM 📸 */}
+                <button
+                  type="button"
+                  id="modal-instagram-share-btn"
+                  onClick={handleInstagramShare}
+                  className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-[#833ab4] via-[#fd1d1d] to-[#fcb045] hover:opacity-95 text-white font-bold text-sm shadow-sm flex items-center justify-center gap-2 transition active:scale-95 cursor-pointer"
+                >
+                  <span>📸</span>
+                  <span>Share on Instagram</span>
+                </button>
+
+                {/* Instagram copy confirmation notice */}
+                {instagramMessage && (
+                  <p className="text-center text-xs text-rose-600 font-semibold animate-fade-in">
+                    Link copied ❤️ Open Instagram and paste it.
+                  </p>
+                )}
+
+                {/* 4. OPEN MY PAGE ❤️ */}
                 <button
                   type="button"
                   id="modal-open-my-page-btn"

@@ -57,24 +57,13 @@ export async function getPhotoFromIDB(key: string): Promise<string | null> {
   }
 }
 
-export function generatePermanentSlug(yourName?: string, recipientName?: string, id?: string): string {
-  const sanitize = (name?: string, fallback: string = 'love') => {
-    if (!name || name === 'undefined' || name === 'null') return fallback;
-    return (
-      name
-        .toLowerCase()
-        .trim()
-        .replace(new RegExp('[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|\\p{Emoji}|\\p{Extended_Pictographic}', 'gu'), '')
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '') || fallback
-    );
-  };
-
-  const yClean = sanitize(yourName, 'me');
-  const rClean = sanitize(recipientName, 'you');
-  const cleanId = (id || generateUniqueId()).replace(/[^a-zA-Z0-9]/g, '').slice(0, 6).toLowerCase() || generateUniqueId().slice(0, 4);
-
-  return `${yClean}-${rClean}-${cleanId}`.replace(/-+/g, '-').replace(/^-+|-+$/g, '');
+export function generatePermanentSlug(_yourName?: string, _recipientName?: string, id?: string): string {
+  if (id && id.toLowerCase().startsWith('loveletter-')) {
+    const existingId = id.slice(11).replace(/[^a-zA-Z0-9]/g, '').slice(0, 8).toLowerCase();
+    if (existingId) return `loveletter-${existingId}`;
+  }
+  const cleanId = (id || generateUniqueId()).replace(/^loveletter-?/i, '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 6).toLowerCase() || generateUniqueId().slice(0, 4);
+  return `loveletter-${cleanId}`;
 }
 
 export function saveProposal(proposal: LoveProposal): void {
@@ -252,4 +241,36 @@ export function generateUniqueId(): string {
     result += chars.charAt(Math.floor(Math.random() * chars.length));
   }
   return result;
+}
+
+/**
+ * Public Vercel LoveLetter production domain.
+ * Never exposes AI Studio preview, ais-dev, run.app, localhost, or GitHub URLs when sharing externally.
+ */
+export const VERCEL_PRODUCTION_ORIGIN = 'https://loveletter-blush.vercel.app';
+
+/**
+ * Converts any local, preview, or internal URL into the public Vercel LoveLetter URL
+ * preserving the exact path, slug, and hash payload.
+ */
+export function formatVercelShareUrl(urlOrPath: string): string {
+  if (!urlOrPath) return VERCEL_PRODUCTION_ORIGIN;
+  // If it's already a full URL, replace internal/preview origins with the Vercel domain
+  if (urlOrPath.startsWith('http://') || urlOrPath.startsWith('https://')) {
+    try {
+      const parsed = new URL(urlOrPath);
+      // If host is an internal preview or non-vercel host (e.g. ais-dev, run.app, localhost, etc.)
+      if (!parsed.hostname.endsWith('vercel.app')) {
+        return `${VERCEL_PRODUCTION_ORIGIN}${parsed.pathname}${parsed.search}${parsed.hash}`;
+      }
+      return urlOrPath;
+    } catch {
+      // fallback regex replacement
+      return urlOrPath.replace(/^https?:\/\/[^/]+/, VERCEL_PRODUCTION_ORIGIN);
+    }
+  }
+
+  // If it's a relative path e.g. /love/slug#payload
+  const cleanPath = urlOrPath.startsWith('/') ? urlOrPath : `/${urlOrPath}`;
+  return `${VERCEL_PRODUCTION_ORIGIN}${cleanPath}`;
 }

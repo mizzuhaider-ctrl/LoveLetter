@@ -4,7 +4,7 @@ import { FloatingParticles } from './FloatingParticles';
 import { AudioPlayer } from './AudioPlayer';
 import { setMusicLanguage } from '../utils/audioController';
 import { Sparkles, Check } from 'lucide-react';
-import { generatePermanentSlug, encodeProposalToPayload } from '../utils/storage';
+import { generatePermanentSlug, encodeProposalToPayload, formatVercelShareUrl, VERCEL_PRODUCTION_ORIGIN } from '../utils/storage';
 import { PAYMENT_CONFIG, getDisplayPrice } from '../config/payment';
 
 interface CelebrationPageProps {
@@ -50,13 +50,14 @@ export const CelebrationPage: React.FC<CelebrationPageProps> = React.memo(({
   }, [proposal.musicLanguage]);
 
   const [copied, setCopied] = React.useState(false);
+  const [instagramMessage, setInstagramMessage] = React.useState(false);
 
   const getShareUrl = () => {
-    if (typeof window === 'undefined') return '';
-    const origin = window.location.origin;
-    const slug = proposal.slug || generatePermanentSlug(proposal.yourName, proposal.recipientName, proposal.id);
+    const slug = (proposal.slug && proposal.slug.startsWith('loveletter-'))
+      ? proposal.slug
+      : generatePermanentSlug(proposal.yourName, proposal.recipientName, proposal.slug || proposal.id);
     const payload = encodeProposalToPayload(proposal);
-    return `${origin}/love/${slug}${payload ? `#${payload}` : ''}`;
+    return `${VERCEL_PRODUCTION_ORIGIN}/love/${slug}${payload ? `#${payload}` : ''}`;
   };
 
   const handleCopyLink = async () => {
@@ -89,6 +90,30 @@ export const CelebrationPage: React.FC<CelebrationPageProps> = React.memo(({
     const text = `Someone made something special for you ❤️\nOpen this:\n${url}`;
     const waUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
     window.open(waUrl, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleInstagramShare = async () => {
+    const rawUrl = getShareUrl();
+    const instagramUrl = formatVercelShareUrl(rawUrl);
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(instagramUrl);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = instagramUrl;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+    } catch {
+      // fallback
+    }
+    setInstagramMessage(true);
+    setTimeout(() => setInstagramMessage(false), 4000);
+    window.open('https://www.instagram.com/', '_blank', 'noopener,noreferrer');
   };
 
   return (
@@ -137,7 +162,6 @@ export const CelebrationPage: React.FC<CelebrationPageProps> = React.memo(({
           src="/assets/cat-kisses-camera.gif"
           alt="Cute cat kisses camera"
           loading="eager"
-          // @ts-expect-error fetchPriority attribute is supported by modern browsers / React
           fetchPriority="high"
           style={{
             display: "block",
@@ -280,7 +304,21 @@ export const CelebrationPage: React.FC<CelebrationPageProps> = React.memo(({
                 <span>SHARE ON WHATSAPP 💚</span>
               </button>
 
+              <button
+                type="button"
+                id="instagram-share-btn-celebration"
+                onClick={handleInstagramShare}
+                className="w-full py-3.5 px-5 rounded-2xl bg-gradient-to-r from-[#833ab4] via-[#fd1d1d] to-[#fcb045] hover:opacity-95 text-white font-bold text-sm shadow-sm flex items-center justify-center gap-2 transition active:scale-95 cursor-pointer"
+              >
+                <span>📸</span>
+                <span>Share on Instagram</span>
+              </button>
 
+              {instagramMessage && (
+                <p className="text-center text-xs text-rose-600 font-semibold animate-fade-in">
+                  Link copied ❤️ Open Instagram and paste it.
+                </p>
+              )}
 
               <button
                 type="button"
