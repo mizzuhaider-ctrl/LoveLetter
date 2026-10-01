@@ -20,6 +20,13 @@ import {
   getDisplayPrice,
   getOrderAmountPaise,
 } from './src/config/payment';
+import {
+  recordOrder,
+  recordVerifiedPayment,
+  getVerifiedPayment,
+  getVerifiedPaymentByOrderId,
+  getOrderIdForProposal,
+} from './src/server/paymentStore';
 
 /**
  * Server-side payment configuration derived directly from src/config/payment.ts
@@ -73,13 +80,106 @@ app.get('/api/payment/config', (_req: Request, res: Response) => {
     gateway: FREE_TEST_MODE ? 'simulator' : 'razorpay',
     keyId: RAZORPAY_KEY_ID || '',
     currency: PAYMENT_CONFIG.currency,
-    price: PAYMENT_CONFIG.displayPrice, // ₹0 in test mode, ₹99 in production
+    price: PAYMENT_CONFIG.displayPrice, // ₹69 in production
     displayPrice: PAYMENT_CONFIG.displayPrice,
     testMode: PAYMENT_TEST_MODE,
     simulatedTestAmount: PAYMENT_TEST_MODE ? (TEST_PAYMENT_AMOUNT / 100) : 0, // ₹1 test amount
     amountInPaise: PAYMENT_CONFIG.amountInPaise,
     planName: PAYMENT_CONFIG.planName,
   });
+});
+
+// Persistent Payment Status API: Single source of truth for payment recovery
+app.get('/api/payment/status', async (req: Request, res: Response) => {
+  try {
+    const proposalId = (
+      (req.query.proposalId as string) ||
+      (req.body?.proposalId as string) ||
+      ''
+    ).trim();
+
+    if (!proposalId) {
+      return res.status(400).json({
+        success: false,
+        verified: false,
+        error: 'Missing proposal ID',
+        message: 'proposalId is required to query payment status.',
+      });
+    }
+
+    // 1. Check persistent verified store on server
+    const verified = getVerifiedPayment(proposalId);
+    if (verified) {
+      return res.json({
+        success: true,
+        verified: true,
+        proposalId: verified.proposalId,
+        orderId: verified.orderId,
+        paymentId: verified.paymentId,
+        slug: verified.slug,
+        verifiedAt: verified.verifiedAt,
+        message: 'Payment verified from persistent backend store.',
+      });
+    }
+
+    // 2. Direct Razorpay check if order exists for this proposal
+    const orderId = getOrderIdForProposal(proposalId);
+    if (orderId && isRazorpayConfigured) {
+      try {
+        const authHeader = `Basic ${Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString('base64')}`;
+        const paymentsRes = await fetch(`${RAZORPAY_BASE_URL}/orders/${encodeURIComponent(orderId)}/payments`, {
+          method: 'GET',
+          headers: {
+            Authorization: authHeader,
+            'Content-Type': 'application/json',
+          },
+        });
+
+        if (paymentsRes.ok) {
+          const paymentsData = await paymentsRes.json();
+          const items = paymentsData.items || [];
+          const capturedPayment = items.find((p: any) => p.status === 'captured' || p.status === 'authorized');
+
+          if (capturedPayment) {
+            const record = {
+              proposalId,
+              orderId,
+              paymentId: capturedPayment.id,
+              verifiedAt: Date.now(),
+            };
+            recordVerifiedPayment(record);
+
+            return res.json({
+              success: true,
+              verified: true,
+              proposalId,
+              orderId,
+              paymentId: capturedPayment.id,
+              verifiedAt: record.verifiedAt,
+              message: 'Payment confirmed via Razorpay API.',
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('Note: Razorpay live order check error:', err);
+      }
+    }
+
+    return res.json({
+      success: true,
+      verified: false,
+      proposalId,
+      message: 'No verified payment found for this LoveLetter.',
+    });
+  } catch (error: any) {
+    console.error('Error fetching payment status:', error);
+    return res.status(500).json({
+      success: false,
+      verified: false,
+      error: 'Status lookup failed',
+      message: error?.message || 'Could not fetch payment status.',
+    });
+  }
 });
 
 // Free Test Mode Backend Unlock API (Simulation only for development/testing without Razorpay KYC)
@@ -221,11 +321,20 @@ app.post('/api/payment/create-order', async (req: Request, res: Response) => {
 
     const { proposalId, yourName } = req.body || {};
 
+    if (!proposalId || typeof proposalId !== 'string' || proposalId.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing proposal ID',
+        message: 'A valid proposalId is required to create a payment order.',
+      });
+    }
+
+    const cleanProposalId = proposalId.trim();
     // Razorpay amount is calculated server-side in paise (never trust frontend amount)
     const amountInPaise = PAYMENT_CONFIG.amountInPaise;
 
     // Sanitized receipt identifier (max 40 chars)
-    const sanitizedId = (proposalId || 'love').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 10);
+    const sanitizedId = cleanProposalId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 10) || 'love';
     const receipt = `rcpt_${sanitizedId}_${Date.now().toString().slice(-6)}`;
 
     const authHeader = `Basic ${Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString('base64')}`;
@@ -235,7 +344,7 @@ app.post('/api/payment/create-order', async (req: Request, res: Response) => {
       currency: PAYMENT_CONFIG.currency,
       receipt,
       notes: {
-        proposalId: (proposalId || '').slice(0, 40),
+        proposalId: cleanProposalId.slice(0, 40),
         creator: (yourName || 'Romantic Creator').trim().slice(0, 40),
         plan: PAYMENT_CONFIG.planName,
         testMode: String(PAYMENT_TEST_MODE),
@@ -261,6 +370,9 @@ app.post('/api/payment/create-order', async (req: Request, res: Response) => {
         message: data?.error?.description || 'Unable to generate Razorpay order.',
       });
     }
+
+    // Persist order mapping to proposal ID in server store
+    recordOrder(cleanProposalId, data.id);
 
     return res.json({
       success: true,
@@ -299,11 +411,13 @@ app.post('/api/payment/verify-payment', async (req: Request, res: Response) => {
       orderId: legacyOrderId,
       paymentId: legacyPaymentId,
       signature: legacySignature,
+      proposalId: rawProposalId,
     } = req.body || {};
 
     const orderId = razorpay_order_id || legacyOrderId;
     const paymentId = razorpay_payment_id || legacyPaymentId;
     const signature = razorpay_signature || legacySignature;
+    const proposalId = (rawProposalId || '').trim();
 
     if (!orderId || !paymentId) {
       return res.status(400).json({
@@ -314,14 +428,33 @@ app.post('/api/payment/verify-payment', async (req: Request, res: Response) => {
       });
     }
 
-    // Check if already verified in this server instance
-    if (verifiedOrders.has(orderId)) {
-      const cached = verifiedOrders.get(orderId)!;
+    if (!proposalId) {
+      return res.status(400).json({
+        success: false,
+        verified: false,
+        error: 'Missing proposal ID',
+        message: 'proposalId is required for payment verification.',
+      });
+    }
+
+    // Check persistent store or memory instance
+    const existing = getVerifiedPayment(proposalId) || getVerifiedPaymentByOrderId(orderId);
+    if (existing) {
+      if (existing.proposalId.toLowerCase() !== proposalId.toLowerCase()) {
+        return res.status(400).json({
+          success: false,
+          verified: false,
+          error: 'Order already redeemed',
+          message: 'This payment was already used to unlock a different LoveLetter.',
+        });
+      }
       return res.json({
         success: true,
         verified: true,
-        orderId,
-        paymentId: cached.paymentId,
+        orderId: existing.orderId,
+        paymentId: existing.paymentId,
+        proposalId: existing.proposalId,
+        slug: existing.slug,
         message: 'Payment already verified.',
       });
     }
@@ -358,6 +491,33 @@ app.post('/api/payment/verify-payment', async (req: Request, res: Response) => {
 
     // 2. Direct API Check against Razorpay Server for double authorization
     const authHeader = `Basic ${Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString('base64')}`;
+
+    // Verify order notes contain this proposalId
+    try {
+      const orderRes = await fetch(`${RAZORPAY_BASE_URL}/orders/${encodeURIComponent(orderId)}`, {
+        method: 'GET',
+        headers: {
+          Authorization: authHeader,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (orderRes.ok) {
+        const orderData = await orderRes.json();
+        const orderProposalId = (orderData?.notes?.proposalId || '').trim();
+        if (orderProposalId && orderProposalId.toLowerCase() !== proposalId.toLowerCase()) {
+          return res.status(400).json({
+            success: false,
+            verified: false,
+            error: 'Proposal mismatch',
+            message: 'This payment order belongs to a different LoveLetter. Each LoveLetter requires its own payment.',
+          });
+        }
+      }
+    } catch (orderCheckErr) {
+      console.warn('Order check error:', orderCheckErr);
+    }
+
     const paymentRes = await fetch(`${RAZORPAY_BASE_URL}/payments/${encodeURIComponent(paymentId)}`, {
       method: 'GET',
       headers: {
@@ -382,9 +542,20 @@ app.post('/api/payment/verify-payment', async (req: Request, res: Response) => {
 
     // Strict Backend Check: ONLY unlock when HMAC signature is verified AND payment belongs to this order AND status is captured/authorized
     if (signatureVerified && isPaymentCaptured && matchesOrder) {
+      const slug = (req.body?.slug || '').trim() || undefined;
+
       verifiedOrders.set(orderId, {
         orderId,
         paymentId,
+        verifiedAt: Date.now(),
+        proposalId,
+      });
+
+      recordVerifiedPayment({
+        proposalId,
+        orderId,
+        paymentId,
+        slug,
         verifiedAt: Date.now(),
       });
 
@@ -393,6 +564,8 @@ app.post('/api/payment/verify-payment', async (req: Request, res: Response) => {
         verified: true,
         orderId,
         paymentId,
+        proposalId,
+        slug,
         amount: paymentData.amount,
         status: paymentData.status,
       });

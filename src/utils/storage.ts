@@ -66,7 +66,124 @@ export function generatePermanentSlug(_yourName?: string, _recipientName?: strin
   return `loveletter-${cleanId}`;
 }
 
+const PAID_PREFIX = 'love_page_paid_';
+const LAST_PAID_KEY = 'love_page_last_paid';
+const memoryPaidProposals = new Set<string>();
+
+/**
+ * Checks server-side persistent store and Razorpay API directly for verified payment status.
+ * Backend remains the authoritative single source of truth.
+ */
+export async function checkBackendPaymentStatus(proposalId: string): Promise<{
+  verified: boolean;
+  orderId?: string;
+  paymentId?: string;
+  slug?: string;
+}> {
+  if (!proposalId) return { verified: false };
+  try {
+    const res = await fetch(`/api/payment/status?proposalId=${encodeURIComponent(proposalId)}`);
+    if (!res.ok) return { verified: false };
+    const data = await res.json();
+    if (data.verified && data.proposalId.toLowerCase() === proposalId.toLowerCase()) {
+      markProposalPaid(proposalId, {
+        orderId: data.orderId,
+        paymentId: data.paymentId,
+      });
+      return {
+        verified: true,
+        orderId: data.orderId,
+        paymentId: data.paymentId,
+        slug: data.slug,
+      };
+    }
+  } catch (err) {
+    console.warn('Backend payment status check failed:', err);
+  }
+  return { verified: false };
+}
+
+export function setLastPaidProposal(proposal: LoveProposal): void {
+  try {
+    localStorage.setItem(LAST_PAID_KEY, JSON.stringify(proposal));
+  } catch {
+    // Ignore error
+  }
+}
+
+export function getLastPaidProposal(): LoveProposal | null {
+  try {
+    const raw = localStorage.getItem(LAST_PAID_KEY);
+    if (raw) {
+      return JSON.parse(raw) as LoveProposal;
+    }
+  } catch {
+    // Ignore error
+  }
+  return null;
+}
+
+/**
+ * Removes local paid state for a proposal if backend verification indicates it is unverified or invalid.
+ */
+export function clearProposalPaid(proposalId: string): void {
+  if (!proposalId) return;
+  memoryPaidProposals.delete(proposalId);
+  try {
+    localStorage.removeItem(`${PAID_PREFIX}${proposalId}`);
+    const lastPaid = getLastPaidProposal();
+    if (lastPaid && lastPaid.id === proposalId) {
+      localStorage.removeItem(LAST_PAID_KEY);
+    }
+  } catch {
+    // Ignore error
+  }
+}
+
+/**
+ * Binds a verified payment to a specific LoveLetter proposal ID.
+ */
+export function markProposalPaid(proposalId: string, details?: { orderId?: string; paymentId?: string }): void {
+  if (!proposalId) return;
+  memoryPaidProposals.add(proposalId);
+  try {
+    localStorage.setItem(
+      `${PAID_PREFIX}${proposalId}`,
+      JSON.stringify({
+        proposalId,
+        orderId: details?.orderId || '',
+        paymentId: details?.paymentId || '',
+        verifiedAt: Date.now(),
+      })
+    );
+  } catch (err) {
+    console.warn('Unable to persist paid state to localStorage', err);
+  }
+}
+
+/**
+ * Checks whether this exact proposal ID has a verified paid record.
+ */
+export function isProposalPaid(proposalId: string): boolean {
+  if (!proposalId) return false;
+  if (memoryPaidProposals.has(proposalId)) return true;
+  try {
+    const raw = localStorage.getItem(`${PAID_PREFIX}${proposalId}`);
+    if (raw) {
+      memoryPaidProposals.add(proposalId);
+      return true;
+    }
+  } catch {
+    // Ignore error
+  }
+  return false;
+}
+
 export function saveProposal(proposal: LoveProposal): void {
+  if (proposal.isUnlocked) {
+    markProposalPaid(proposal.id);
+  }
+
   memoryRecentProposal = proposal;
   memoryProposals.set(proposal.id, proposal);
   if (proposal.slug) {
@@ -78,7 +195,9 @@ export function saveProposal(proposal: LoveProposal): void {
     if (proposal.slug) {
       localStorage.setItem(`${STORAGE_PREFIX}${proposal.slug}`, JSON.stringify(proposal));
     }
-    localStorage.setItem(RECENT_KEY, JSON.stringify(proposal));
+    // Prevent love_page_maker_recent from leaking unlocked state to fresh proposals
+    const recentDraft = { ...proposal, isUnlocked: false };
+    localStorage.setItem(RECENT_KEY, JSON.stringify(recentDraft));
   } catch (err) {
     console.warn('Unable to persist full proposal to localStorage (quota exceeded), offloading photo', err);
     try {
@@ -88,7 +207,8 @@ export function saveProposal(proposal: LoveProposal): void {
       if (proposal.slug) {
         localStorage.setItem(`${STORAGE_PREFIX}${proposal.slug}`, JSON.stringify(lightweight));
       }
-      localStorage.setItem(RECENT_KEY, JSON.stringify(lightweight));
+      const lightweightRecent = { ...lightweight, isUnlocked: false };
+      localStorage.setItem(RECENT_KEY, JSON.stringify(lightweightRecent));
     } catch (fallbackErr) {
       console.warn('Fallback localStorage write failed', fallbackErr);
     }
@@ -102,18 +222,23 @@ export function saveProposal(proposal: LoveProposal): void {
     }
     persistPhotoToIDB('recent_photo', proposal.photoUrl).catch(() => {});
   }
-
-
 }
 
 export function getProposal(id: string): LoveProposal | null {
   if (memoryProposals.has(id)) {
-    return memoryProposals.get(id)!;
+    const cached = memoryProposals.get(id)!;
+    if (isProposalPaid(cached.id)) {
+      cached.isUnlocked = true;
+    }
+    return cached;
   }
   try {
     const raw = localStorage.getItem(`${STORAGE_PREFIX}${id}`);
     if (raw) {
       const parsed = JSON.parse(raw) as LoveProposal;
+      if (isProposalPaid(parsed.id) || isProposalPaid(id)) {
+        parsed.isUnlocked = true;
+      }
       memoryProposals.set(id, parsed);
       return parsed;
     }
@@ -125,12 +250,15 @@ export function getProposal(id: string): LoveProposal | null {
 
 export function getRecentProposal(): LoveProposal | null {
   if (memoryRecentProposal) {
-    return memoryRecentProposal;
+    const isPaid = isProposalPaid(memoryRecentProposal.id);
+    return { ...memoryRecentProposal, isUnlocked: isPaid };
   }
   try {
     const raw = localStorage.getItem(RECENT_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as LoveProposal;
+      // Strictly prevent unlocked state transfer to any new letter
+      parsed.isUnlocked = isProposalPaid(parsed.id);
       memoryRecentProposal = parsed;
       return parsed;
     }

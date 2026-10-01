@@ -12,6 +12,12 @@ import {
   getPhotoFromIDB,
   decodeProposalFromPayload,
   generateUniqueId,
+  markProposalPaid,
+  isProposalPaid,
+  getLastPaidProposal,
+  setLastPaidProposal,
+  checkBackendPaymentStatus,
+  clearProposalPaid,
 } from './utils/storage';
 import { CreatorDashboard } from './components/CreatorDashboard';
 import { ProposalPage } from './components/ProposalPage';
@@ -94,14 +100,20 @@ export default function App() {
           razorpay_payment_id: rzpPaymentId,
           razorpay_order_id: rzpOrderId,
           razorpay_signature: rzpSignature || '',
+          proposalId: proposal.id,
         }),
       })
         .then((res) => res.json())
         .then((data) => {
           if (data.success && data.verified) {
+            markProposalPaid(proposal.id, {
+              orderId: rzpOrderId,
+              paymentId: rzpPaymentId,
+            });
             setProposal((prev) => {
               const unlocked = { ...prev, isUnlocked: true };
               saveProposal(unlocked);
+              setLastPaidProposal(unlocked);
               return unlocked;
             });
             setIsUnlockModalOpen(true);
@@ -123,14 +135,35 @@ export default function App() {
           const lang = decoded.musicLanguage || 'hindi';
           setMusicLanguage(lang);
           setIsMusicModalOpen(false);
+          const isPaid = isProposalPaid(decoded.id || '') || Boolean(decoded.isUnlocked);
           setProposal((prev) => ({
             ...prev,
             ...decoded,
             id: decoded.id || prev.id,
             slug: decoded.slug || proposalIdentifier,
+            isUnlocked: isPaid,
           }));
           setIsRecipientRoute(true);
           setViewState('proposal');
+
+          // Always verify with authoritative server backend
+          if (decoded.id) {
+            checkBackendPaymentStatus(decoded.id).then((status) => {
+              if (status.verified) {
+                setProposal((prev) => ({
+                  ...prev,
+                  isUnlocked: true,
+                  slug: status.slug || prev.slug,
+                }));
+              } else {
+                clearProposalPaid(decoded.id!);
+                setProposal((prev) => ({
+                  ...prev,
+                  isUnlocked: false,
+                }));
+              }
+            });
+          }
           return;
         }
       }
@@ -142,13 +175,29 @@ export default function App() {
           const lang = stored.musicLanguage || 'hindi';
           setMusicLanguage(lang);
           setIsMusicModalOpen(false);
-          setProposal(stored);
+          const isPaid = isProposalPaid(stored.id) || Boolean(stored.isUnlocked);
+          setProposal({ ...stored, isUnlocked: isPaid });
           setIsRecipientRoute(true);
           setViewState('proposal');
+
+          // Check authoritative backend status
+          checkBackendPaymentStatus(stored.id).then((status) => {
+            if (status.verified) {
+              setProposal((prev) => ({
+                ...prev,
+                isUnlocked: true,
+                slug: status.slug || prev.slug,
+              }));
+            } else {
+              clearProposalPaid(stored.id);
+              setProposal((prev) => ({
+                ...prev,
+                isUnlocked: false,
+              }));
+            }
+          });
           return;
         }
-
-
       }
 
       // 3. If query params have recipient name
@@ -160,6 +209,7 @@ export default function App() {
           id: proposalIdentifier || prev.id,
           recipientName: rName,
           yourName: yName || 'Someone who loves you',
+          isUnlocked: false,
         }));
         setIsRecipientRoute(true);
         setViewState('proposal');
@@ -167,18 +217,51 @@ export default function App() {
       }
 
       // 4. Default for any public /love route so recipient is never kicked to creator dashboard
-      const recent = getRecentProposal();
-      if (recent && recent.recipientName) {
-        setProposal(recent);
+      const lastPaid = getLastPaidProposal();
+      if (lastPaid && lastPaid.recipientName) {
+        setProposal({ ...lastPaid, isUnlocked: true });
+        checkBackendPaymentStatus(lastPaid.id).then((status) => {
+          if (status.verified) {
+            setProposal((prev) => ({
+              ...prev,
+              isUnlocked: true,
+              slug: status.slug || prev.slug,
+            }));
+          } else {
+            clearProposalPaid(lastPaid.id);
+            setProposal((prev) => ({
+              ...prev,
+              isUnlocked: false,
+            }));
+          }
+        });
       } else {
-        setProposal((prev) => ({
-          ...prev,
-          recipientName: prev.recipientName || 'My Love',
-          yourName: prev.yourName || 'Someone who loves you',
-          questionChoice: 'gf',
-          message: prev.message || "You're the most beautiful person I know. I love you endlessly. 💕",
-          musicLanguage: prev.musicLanguage || 'hindi',
-        }));
+        const recent = getRecentProposal();
+        if (recent && recent.recipientName) {
+          const isPaid = isProposalPaid(recent.id);
+          setProposal({ ...recent, isUnlocked: isPaid });
+          if (isPaid) {
+            checkBackendPaymentStatus(recent.id).then((status) => {
+              if (!status.verified) {
+                clearProposalPaid(recent.id);
+                setProposal((prev) => ({
+                  ...prev,
+                  isUnlocked: false,
+                }));
+              }
+            });
+          }
+        } else {
+          setProposal((prev) => ({
+            ...prev,
+            recipientName: prev.recipientName || 'My Love',
+            yourName: prev.yourName || 'Someone who loves you',
+            questionChoice: 'gf',
+            message: prev.message || "You're the most beautiful person I know. I love you endlessly. 💕",
+            musicLanguage: prev.musicLanguage || 'hindi',
+            isUnlocked: false,
+          }));
+        }
       }
 
       setIsRecipientRoute(true);
@@ -219,6 +302,31 @@ export default function App() {
     if (typeof window !== 'undefined') {
       window.history.pushState({}, '', '/');
     }
+
+    // When the customer chooses "Back to Edit" after payment and wants to create a completely new LoveLetter:
+    // - Generate a fresh proposal ID.
+    // - Set isUnlocked to false.
+    // - Remove the previous permanent slug from the new proposal.
+    // - Do NOT carry over the previous payment status or unlocked state.
+    // - The new LoveLetter must require a new ₹69 Razorpay payment.
+    setProposal((prev) => {
+      if (prev.isUnlocked || isProposalPaid(prev.id)) {
+        return {
+          id: generateUniqueId(),
+          recipientName: '',
+          yourName: prev.yourName || '',
+          questionChoice: 'gf',
+          customQuestion: '',
+          message: '',
+          photoUrl: undefined,
+          musicLanguage: prev.musicLanguage || 'hindi',
+          createdAt: Date.now(),
+          isUnlocked: false,
+          slug: undefined,
+        };
+      }
+      return prev;
+    });
   }, []);
 
   // Listen to browser forward/back buttons for legal pages and routes
@@ -349,7 +457,7 @@ export default function App() {
         />
       )}
 
-      {/* UNLOCK & SHARE MODAL (ONLY ₹99 PLAN) */}
+      {/* UNLOCK & SHARE MODAL (ONLY ₹69 PLAN) */}
       <UnlockShareModal
         isOpen={isUnlockModalOpen}
         onClose={() => setIsUnlockModalOpen(false)}

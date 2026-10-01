@@ -17,10 +17,10 @@ export default function handler(req: any, res: any) {
     isConfigured: isConfigured,
     keyId: keyId,
     currency: 'INR',
-    price: 99,
-    displayPrice: 99,
+    price: 69,
+    displayPrice: 69,
     testMode: false,
-    amountInPaise: 9900,
+    amountInPaise: 6900,
     planName: 'PREMIUM',
   });
 }

@@ -1,3 +1,5 @@
+import { recordOrder } from '../../src/server/paymentStore';
+
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -31,8 +33,17 @@ export default async function handler(req: any, res: any) {
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
     const { proposalId, yourName } = body;
 
-    const amountInPaise = 100; // Test mode 100 paise
-    const sanitizedId = (proposalId || 'love').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 10);
+    if (!proposalId || typeof proposalId !== 'string' || proposalId.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing proposal ID',
+        message: 'A valid proposalId is required to create a payment order.',
+      });
+    }
+
+    const cleanProposalId = proposalId.trim();
+    const amountInPaise = 6900; // 6900 paise = ₹69
+    const sanitizedId = cleanProposalId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 10) || 'love';
     const receipt = `rcpt_${sanitizedId}_${Date.now().toString().slice(-6)}`;
     const authHeader = `Basic ${Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString('base64')}`;
 
@@ -41,8 +52,9 @@ export default async function handler(req: any, res: any) {
       currency: 'INR',
       receipt,
       notes: {
-        proposalId: (proposalId || '').slice(0, 40),
+        proposalId: cleanProposalId.slice(0, 40),
         creator: (yourName || 'Romantic Creator').trim().slice(0, 40),
+        plan: 'PREMIUM',
       },
     };
 
@@ -65,12 +77,16 @@ export default async function handler(req: any, res: any) {
       });
     }
 
+    // Persist order mapping to proposal ID
+    recordOrder(cleanProposalId, data.id);
+
     return res.status(200).json({
       success: true,
       orderId: data.id,
       amount: data.amount,
       currency: data.currency,
       keyId: RAZORPAY_KEY_ID,
+      planName: 'PREMIUM',
     });
   } catch (error: any) {
     return res.status(500).json({

@@ -229,17 +229,13 @@ export const CelebrationPage: React.FC<CelebrationPageProps> = React.memo(({
             <div className="rounded-2xl border-2 border-rose-200 bg-gradient-to-b from-rose-50/80 to-pink-50/40 p-4 mb-4">
               <div className="flex items-center justify-between mb-3">
                 <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-rose-500 text-white shadow-xs">
-                  💖 {PAYMENT_CONFIG.PAYMENT_TEST_MODE ? 'PREMIUM' : 'PREMIUM'}
+                  💖 PREMIUM
                 </span>
                 <div className="text-right">
                   <span className="text-2xl sm:text-3xl font-black text-rose-600">
                     ₹{getDisplayPrice()}
                   </span>
-                  {PAYMENT_CONFIG.PAYMENT_TEST_MODE && (
-                    <p className="text-[11px] font-bold text-amber-600 uppercase tracking-wider">
-                      TEST MODE
-                    </p>
-                  )}
+                  <p className="text-[11px] text-gray-500 font-medium">One-time payment</p>
                 </div>
               </div>
 
@@ -263,26 +259,20 @@ export const CelebrationPage: React.FC<CelebrationPageProps> = React.memo(({
             >
               <span>UNLOCK FOR ₹{getDisplayPrice()} ❤️</span>
             </button>
-
-            {PAYMENT_CONFIG.PAYMENT_TEST_MODE && (
-              <p className="text-center text-[11px] text-gray-500 mt-2 font-medium">
-                TEST MODE — No real money will be charged.
-              </p>
-            )}
           </div>
         )}
 
-        {/* After verified payment: Show "Your Love Page is Ready ❤️" */}
+        {/* After verified payment: Show "Payment Successful ❤️" */}
         {!isRecipientView && proposal.isUnlocked && (
           <div
             id="verified-love-page-card"
             className="w-full max-w-md bg-white/95 backdrop-blur-md rounded-3xl p-5 sm:p-6 shadow-[0_16px_40px_rgba(0,0,0,0.22)] border-2 border-emerald-200 text-center relative overflow-hidden mb-4"
           >
             <h3 className="text-xl sm:text-2xl font-black text-gray-900 tracking-tight mb-2">
-              Your Love Page is Ready ❤️
+              Payment Successful ❤️
             </h3>
             <p className="text-xs text-gray-600 mb-5">
-              Your permanent page for {proposal.recipientName} is fully unlocked and ready to share!
+              Your LoveLetter is ready.
             </p>
 
             <div className="space-y-3">

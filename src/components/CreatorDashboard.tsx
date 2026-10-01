@@ -6,6 +6,7 @@ import { CouplePhotoUpload } from './CouplePhotoUpload';
 import { AudioPlayer } from './AudioPlayer';
 import { Footer } from './Footer';
 import { attemptPlay, getIsPlaying } from '../utils/audioController';
+import { getLastPaidProposal, checkBackendPaymentStatus, clearProposalPaid } from '../utils/storage';
 
 interface CreatorDashboardProps {
   initialData: LoveProposal;
@@ -41,9 +42,42 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = React.memo(({
     initialData.musicLanguage || 'hindi'
   );
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [recoveredProposal, setRecoveredProposal] = useState<LoveProposal | null>(() => getLastPaidProposal());
+
+  // Check authoritative backend status for previously paid LoveLetter
+  useEffect(() => {
+    const lastPaid = getLastPaidProposal();
+    if (lastPaid && lastPaid.id) {
+      checkBackendPaymentStatus(lastPaid.id).then((res) => {
+        if (res.verified) {
+          setRecoveredProposal({
+            ...lastPaid,
+            isUnlocked: true,
+            slug: res.slug || lastPaid.slug,
+          });
+        } else {
+          clearProposalPaid(lastPaid.id);
+          setRecoveredProposal(null);
+        }
+      });
+    }
+  }, []);
 
   // Track if music has been triggered so we only start on the first character typed
   const hasTriggeredMusicRef = useRef(false);
+
+  // Sync all fields if proposal ID changes (e.g. creating a new LoveLetter after previous payment)
+  useEffect(() => {
+    setRecipientName(initialData.recipientName || '');
+    setYourName(initialData.yourName || '');
+    setQuestionChoice(initialData.questionChoice || 'gf');
+    setCustomQuestion(initialData.customQuestion || '');
+    setMessage(initialData.message || '');
+    setPhotoUrl(initialData.photoUrl);
+    setMusicLanguageState(initialData.musicLanguage || 'hindi');
+    setErrorMessage(null);
+    hasTriggeredMusicRef.current = false;
+  }, [initialData.id]);
 
   // Sync photoUrl if initialData changes (e.g. from IndexedDB or back navigation)
   useEffect(() => {
@@ -167,6 +201,28 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = React.memo(({
           <div className="mb-5 p-3 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium flex items-center gap-2 animate-shake">
             <AlertCircle className="w-4 h-4 text-rose-500 flex-shrink-0" />
             <span>{errorMessage}</span>
+          </div>
+        )}
+
+        {/* Persistent Recovery Banner for already-paid LoveLetter */}
+        {recoveredProposal && (
+          <div
+            id="recovered-loveletter-banner"
+            className="mb-6 p-3.5 rounded-2xl bg-gradient-to-r from-rose-50 to-pink-50 border border-rose-200 text-xs text-rose-900 flex items-center justify-between gap-2 shadow-xs"
+          >
+            <div className="flex items-center gap-2 truncate">
+              <Heart className="w-4 h-4 fill-rose-500 text-rose-500 flex-shrink-0" />
+              <span className="truncate font-medium">
+                Paid letter for <strong>{recoveredProposal.recipientName || 'your love'}</strong> is ready!
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => onPreview(recoveredProposal)}
+              className="px-3 py-1.5 rounded-xl bg-rose-500 hover:bg-rose-600 text-white font-bold text-xs whitespace-nowrap transition cursor-pointer shadow-xs active:scale-95"
+            >
+              View & Share →
+            </button>
           </div>
         )}
 

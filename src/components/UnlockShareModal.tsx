@@ -6,6 +6,10 @@ import {
   generatePermanentSlug,
   formatVercelShareUrl,
   VERCEL_PRODUCTION_ORIGIN,
+  markProposalPaid,
+  checkBackendPaymentStatus,
+  setLastPaidProposal,
+  clearProposalPaid,
 } from '../utils/storage';
 import {
   X,
@@ -110,14 +114,7 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSetupRequired, setIsSetupRequired] = useState(false);
 
-  // Active test mode flags from central config or backend response
-  const isFreeTestMode = paymentConfig
-    ? (paymentConfig.freeTestMode ?? PAYMENT_CONFIG.FREE_TEST_MODE)
-    : PAYMENT_CONFIG.FREE_TEST_MODE;
-  const isTestMode = paymentConfig
-    ? (paymentConfig.testMode ?? PAYMENT_CONFIG.PAYMENT_TEST_MODE)
-    : PAYMENT_CONFIG.PAYMENT_TEST_MODE;
-  const currentDisplayPrice = paymentConfig?.displayPrice ?? getDisplayPrice(isTestMode, isFreeTestMode);
+  const currentDisplayPrice = paymentConfig?.displayPrice ?? getDisplayPrice(false, false);
 
   const [shareableUrl, setShareableUrl] = useState<string>(() => {
     const slug = proposal.slug && proposal.slug.startsWith('loveletter-')
@@ -139,7 +136,7 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
       .then((res) => res.json())
       .then((data: PaymentConfig) => {
         setPaymentConfig(data);
-        if (!data.freeTestMode && !data.isConfigured) {
+        if (!data.isConfigured) {
           setIsSetupRequired(true);
         }
       })
@@ -148,99 +145,66 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
       });
   }, [isOpen]);
 
-  // Sync state if proposal already unlocked
+  // Sync state and check authoritative backend verification
   useEffect(() => {
+    const slug = proposal.slug && proposal.slug.startsWith('loveletter-')
+      ? proposal.slug
+      : generatePermanentSlug(proposal.yourName, proposal.recipientName, proposal.slug || proposal.id);
+    const payload = encodeProposalToPayload(proposal);
+    setShareableUrl(`${VERCEL_PRODUCTION_ORIGIN}/love/${slug}${payload ? `#${payload}` : ''}`);
+
     if (proposal.isUnlocked) {
       setStep('success');
-      const slug = proposal.slug && proposal.slug.startsWith('loveletter-')
-        ? proposal.slug
-        : generatePermanentSlug(proposal.yourName, proposal.recipientName, proposal.slug || proposal.id);
-      const payload = encodeProposalToPayload(proposal);
-      setShareableUrl(`${VERCEL_PRODUCTION_ORIGIN}/love/${slug}${payload ? `#${payload}` : ''}`);
+      setPaymentStatus('success');
+    } else {
+      setStep('plan');
+      setPaymentStatus('idle');
+      setErrorMessage(null);
     }
-  }, [proposal.isUnlocked, proposal]);
+
+    // Authoritative backend verification check
+    if (isOpen && proposal.id) {
+      checkBackendPaymentStatus(proposal.id).then((status) => {
+        if (status.verified) {
+          const confirmedSlug = status.slug || slug;
+          const unlocked: LoveProposal = {
+            ...proposal,
+            isUnlocked: true,
+            slug: confirmedSlug,
+          };
+          saveProposal(unlocked);
+          setLastPaidProposal(unlocked);
+          onUnlocked(unlocked);
+          const confirmedPayload = encodeProposalToPayload(unlocked);
+          setShareableUrl(`${VERCEL_PRODUCTION_ORIGIN}/love/${confirmedSlug}${confirmedPayload ? `#${confirmedPayload}` : ''}`);
+          setStep('success');
+          setPaymentStatus('success');
+        } else {
+          // Immediately force isUnlocked = false
+          // Do NOT show the paid/celebration/unlocked state
+          // Remove the localStorage key: love_page_paid_${proposalId}
+          clearProposalPaid(proposal.id);
+          const locked: LoveProposal = {
+            ...proposal,
+            isUnlocked: false,
+          };
+          saveProposal(locked);
+          onUnlocked(locked);
+          setStep('plan');
+          setPaymentStatus('idle');
+        }
+      });
+    }
+  }, [proposal.isUnlocked, proposal.id, isOpen]);
 
   if (!isOpen) return null;
 
-  // Unified click handler: Routes to Free Test Mode simulator OR standard Razorpay flow
+  // Initiate real Razorpay checkout
   const handleInitiatePayment = () => {
-    if (isFreeTestMode) {
-      handleFreeTestUnlock();
-    } else {
-      handleInitiateRazorpayPayment();
-    }
+    handleInitiateRazorpayPayment();
   };
 
-  // Free Test Mode Backend Unlock (Calls server-side /api/payment/free-test-unlock)
-  const handleFreeTestUnlock = async () => {
-    setErrorMessage(null);
-    setPaymentStatus('verifying');
-
-    try {
-      const res = await fetch('/api/payment/free-test-unlock', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        body: JSON.stringify({
-          proposalId: proposal.id,
-          yourName: proposal.yourName,
-          recipientName: proposal.recipientName,
-        }),
-      });
-
-      // Safely parse text and JSON to avoid Safari WebKit DOMExceptions
-      let data: any = null;
-      try {
-        const rawText = await res.text();
-        if (rawText && rawText.trim().length > 0) {
-          data = JSON.parse(rawText);
-        }
-      } catch (parseErr) {
-        console.warn('Response parsing note:', parseErr);
-      }
-
-      if (res.ok && data && (data.verified === true || data.success === true)) {
-        // 1. Generate strictly sanitized permanent slug (only [a-z0-9-])
-        const permanentSlug = generatePermanentSlug(
-          proposal.yourName,
-          proposal.recipientName,
-          proposal.slug || proposal.id
-        );
-
-        // 2. Save user's personalized LoveLetter data with unlocked status
-        const unlockedProposal: LoveProposal = {
-          ...proposal,
-          isUnlocked: true,
-          slug: permanentSlug,
-        };
-        saveProposal(unlockedProposal);
-        onUnlocked(unlockedProposal);
-
-        // 3. Construct permanent shareable link
-        const payload = encodeProposalToPayload(unlockedProposal);
-        const permanentLink = `${VERCEL_PRODUCTION_ORIGIN}/love/${permanentSlug}${payload ? `#${payload}` : ''}`;
-        setShareableUrl(permanentLink);
-
-        // 4. Switch to success
-        setPaymentStatus('success');
-        setStep('success');
-      } else {
-        setPaymentStatus('failed');
-        const fallbackMsg = !res.ok
-          ? `Server returned HTTP ${res.status}: ${res.statusText || 'Endpoint unavailable'}`
-          : 'Free test authorization could not be completed.';
-        setErrorMessage(data?.message || data?.error || fallbackMsg);
-      }
-    } catch (err: any) {
-      console.error('Free test unlock error:', err);
-      setPaymentStatus('failed');
-      setErrorMessage(err?.message || 'Server error while validating free test unlock.');
-    }
-  };
-
-  // Handle clicking "UNLOCK FOR ₹0 ❤️" (Test Mode) or "UNLOCK FOR ₹99 ❤️" (Production) via Razorpay
+  // Handle clicking "UNLOCK FOR ₹69 ❤️" via Razorpay
   const handleInitiateRazorpayPayment = async () => {
     setErrorMessage(null);
 
@@ -286,13 +250,11 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
       }
 
       // 3. Initialize Razorpay Checkout
-      const checkoutDescription = isTestMode
-        ? 'Razorpay Test Mode — simulated test transaction. No real money is charged.'
-        : 'Premium Love Page Unlock';
+      const checkoutDescription = 'Premium Love Page Unlock';
 
       const options = {
         key: orderData.keyId,
-        amount: orderData.amount, // in paise (e.g. 100 paise for ₹1 test mode order)
+        amount: orderData.amount, // in paise (6900 paise for ₹69)
         currency: orderData.currency || 'INR',
         name: 'LoveLetter',
         description: checkoutDescription,
@@ -312,7 +274,7 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
         },
         notes: {
           proposalId: proposal.id,
-          plan: isTestMode ? 'PREMIUM (TEST MODE)' : 'PREMIUM',
+          plan: 'PREMIUM',
         },
         theme: {
           color: '#F43F5E',
@@ -354,34 +316,55 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
     setPaymentStatus('verifying');
     setErrorMessage(null);
 
+    const permanentSlug = (proposal.slug && proposal.slug.startsWith('loveletter-'))
+      ? proposal.slug
+      : generatePermanentSlug(proposal.yourName, proposal.recipientName, proposal.slug || proposal.id);
+
     try {
       const verifyRes = await fetch('/api/payment/verify-payment', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(paymentDetails),
+        body: JSON.stringify({
+          ...paymentDetails,
+          proposalId: proposal.id,
+          slug: permanentSlug,
+        }),
       });
 
       const verifyData = await verifyRes.json();
 
       // STRICT BACKEND VERIFICATION CHECK
       if (verifyData.success && verifyData.verified) {
-        // 1. Generate permanent unique anonymous slug such as: loveletter-x7k2
-        const permanentSlug = (proposal.slug && proposal.slug.startsWith('loveletter-'))
-          ? proposal.slug
-          : generatePermanentSlug(proposal.yourName, proposal.recipientName, proposal.slug || proposal.id);
+        const confirmedSlug = verifyData.slug || permanentSlug;
+
+        // Record payment strictly bound to this exact proposal ID
+        markProposalPaid(proposal.id, {
+          orderId: verifyData.orderId || paymentDetails.razorpay_order_id,
+          paymentId: verifyData.paymentId || paymentDetails.razorpay_payment_id,
+        });
 
         // 2. Save user's personalized LoveLetter data with unlocked status
         const unlockedProposal: LoveProposal = {
           ...proposal,
           isUnlocked: true,
-          slug: permanentSlug,
+          slug: confirmedSlug,
         };
         saveProposal(unlockedProposal);
+        setLastPaidProposal(unlockedProposal);
         onUnlocked(unlockedProposal);
+
+        // Update browser address bar to permanent link for persistent recovery
+        if (typeof window !== 'undefined') {
+          try {
+            window.history.replaceState({}, '', `/love/${confirmedSlug}`);
+          } catch {
+            // ignore
+          }
+        }
 
         // 3. Construct permanent shareable link
         const payload = encodeProposalToPayload(unlockedProposal);
-        const permanentLink = `${VERCEL_PRODUCTION_ORIGIN}/love/${permanentSlug}${payload ? `#${payload}` : ''}`;
+        const permanentLink = `${VERCEL_PRODUCTION_ORIGIN}/love/${confirmedSlug}${payload ? `#${payload}` : ''}`;
         setShareableUrl(permanentLink);
 
         // 4. Switch to success
@@ -469,14 +452,10 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
             </div>
             <div>
               <h3 className="font-bold text-gray-900 text-base">
-                {step === 'success' ? 'Your Love Page is Ready ❤️' : 'Make This Moment Yours Forever ❤️'}
+                {step === 'success' ? 'Payment Successful ❤️' : 'Make This Moment Yours Forever ❤️'}
               </h3>
               <p className="text-xs text-rose-500 font-medium">
-                {step === 'success'
-                  ? `Ready to share with ${proposal.recipientName || 'your love'}`
-                  : isFreeTestMode
-                  ? '💖 PREMIUM • FREE TEST MODE'
-                  : `💖 PREMIUM ${isTestMode ? '• TEST MODE' : ''}`}
+                {step === 'success' ? 'Your LoveLetter is ready.' : '💖 PREMIUM'}
               </p>
             </div>
           </div>
@@ -507,11 +486,7 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
               <div className="flex items-center justify-center gap-1.5 text-[11px] text-gray-500 font-medium">
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
                 <span>
-                  {isFreeTestMode
-                    ? 'Free Test Mode (Development & Testing Simulator)'
-                    : isTestMode
-                    ? 'Razorpay Test Mode (Simulated Sandbox)'
-                    : 'Secured by Razorpay (UPI, Cards, NetBanking, Wallets)'}
+                  Secured by Razorpay (UPI, Cards, NetBanking, Wallets)
                 </span>
               </div>
 
@@ -523,17 +498,7 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
                   </span>
                   <div className="text-right">
                     <span className="text-3xl font-black text-rose-600">₹{currentDisplayPrice}</span>
-                    {isFreeTestMode ? (
-                      <p className="text-[11px] font-bold text-amber-600 uppercase tracking-wider">
-                        FREE TEST MODE
-                      </p>
-                    ) : isTestMode ? (
-                      <p className="text-[11px] font-bold text-amber-600 uppercase tracking-wider">
-                        TEST MODE
-                      </p>
-                    ) : (
-                      <p className="text-[11px] text-gray-500 font-medium">One-time payment</p>
-                    )}
+                    <p className="text-[11px] text-gray-500 font-medium">One-time payment</p>
                   </div>
                 </div>
 
@@ -548,41 +513,18 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
                 </div>
               </div>
 
-              {/* Mode Notice Box */}
-              {isFreeTestMode ? (
-                <div className="p-3.5 rounded-2xl bg-amber-50/90 border border-amber-200 text-amber-900 text-xs space-y-1">
-                  <div className="flex items-center gap-1.5 font-bold text-amber-800">
-                    <Info className="w-4 h-4 text-amber-600 flex-shrink-0" />
-                    <span>FREE TEST MODE — No real payment was made.</span>
-                  </div>
-                  <p className="text-[11px] text-amber-700 leading-relaxed pl-5.5">
-                    Development & Demo Simulator: Allows you to unlock, test, and share your complete LoveLetter page without Razorpay credentials or fees.
-                  </p>
-                </div>
-              ) : isTestMode ? (
-                <div className="p-3 rounded-2xl bg-amber-50/90 border border-amber-200 text-amber-800 text-[11px] space-y-1">
-                  <div className="flex items-center gap-1.5 font-bold">
-                    <Info className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" />
-                    <span>TEST MODE — No real payment will be charged.</span>
-                  </div>
-                  <p className="text-amber-700 leading-relaxed pl-5">
-                    Razorpay Test Mode — ₹1 simulated test transaction. No real money is charged.
-                  </p>
-                </div>
-              ) : null}
-
-              {/* If Razorpay is not configured in environment (only relevant when FREE_TEST_MODE is false) */}
-              {isSetupRequired && !isFreeTestMode && (
+              {/* If Razorpay is not configured in environment */}
+              {isSetupRequired && (
                 <div
                   id="payment-setup-required-box"
                   className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-center space-y-1 animate-fade-in shadow-xs"
                 >
                   <div className="flex items-center justify-center gap-1.5 text-amber-800 font-bold text-sm">
                     <AlertCircle className="w-4 h-4 text-amber-600" />
-                    <span>Razorpay Test Mode is not configured yet.</span>
+                    <span>Razorpay is not configured yet.</span>
                   </div>
                   <p className="text-xs text-amber-700 font-medium leading-relaxed">
-                    Please provide <code>RAZORPAY_KEY_ID</code> and <code>RAZORPAY_KEY_SECRET</code> in your environment variables to enable the Razorpay Test Mode checkout flow.
+                    Please provide <code>RAZORPAY_KEY_ID</code> and <code>RAZORPAY_KEY_SECRET</code> in your environment variables to enable the Razorpay checkout flow.
                   </p>
                 </div>
               )}
@@ -614,22 +556,18 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
               {paymentStatus === 'verifying' && (
                 <div className="p-4 rounded-2xl bg-rose-50/80 border border-rose-200 flex items-center justify-center gap-2 text-rose-600 text-xs font-semibold animate-pulse">
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>
-                    {isFreeTestMode
-                      ? 'Verifying Free Test Authorization with server...'
-                      : 'Verifying Razorpay signature with backend...'}
-                  </span>
+                  <span>Verifying Razorpay signature with backend...</span>
                 </div>
               )}
 
               {paymentStatus === 'opening_checkout' && (
                 <div className="p-4 rounded-2xl bg-rose-50/60 border border-rose-100 flex items-center justify-center gap-2 text-rose-600 text-xs font-semibold animate-pulse">
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>Opening Razorpay Test Mode Checkout...</span>
+                  <span>Opening Razorpay Checkout...</span>
                 </div>
               )}
 
-              {/* Action Button: TEST UNLOCK FOR ₹0 ❤️ (Free Test Mode) or UNLOCK FOR ₹0/₹99 ❤️ (Razorpay) */}
+              {/* Action Button: UNLOCK FOR ₹69 ❤️ */}
               <div className="pt-1 space-y-2">
                 <button
                   type="button"
@@ -651,54 +589,34 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
                   ) : paymentStatus === 'verifying' ? (
                     <>
                       <Loader2 className="w-5 h-5 animate-spin" />
-                      <span>{isFreeTestMode ? 'Unlocking Test Page...' : 'Verifying Signature...'}</span>
+                      <span>Verifying Signature...</span>
                     </>
                   ) : errorMessage ? (
                     <>
                       <RefreshCw className="w-4 h-4" />
                       <span>
-                        Retry — {isFreeTestMode ? 'TEST UNLOCK FOR ₹0 ❤️' : `UNLOCK FOR ₹${currentDisplayPrice} ❤️`}
+                        Retry — UNLOCK FOR ₹{currentDisplayPrice} ❤️
                       </span>
                     </>
-                  ) : isFreeTestMode ? (
-                    <span>TEST UNLOCK FOR ₹0 ❤️</span>
                   ) : (
-                    <span>UNLOCK FOR ₹${currentDisplayPrice} ❤️</span>
+                    <span>UNLOCK FOR ₹{currentDisplayPrice} ❤️</span>
                   )}
                 </button>
-
-                {isFreeTestMode ? (
-                  <p className="text-center text-[11px] text-gray-500 font-medium">
-                    FREE TEST MODE — No real payment was made.
-                  </p>
-                ) : isTestMode ? (
-                  <p className="text-center text-[11px] text-gray-500 font-medium">
-                    TEST MODE — No real money will be charged.
-                  </p>
-                ) : null}
               </div>
             </div>
           )}
 
-          {/* STEP 2: SUCCESS & "Your Love Page is Ready ❤️" */}
+          {/* STEP 2: SUCCESS & Payment Successful */}
           {step === 'success' && (
             <div className="space-y-4">
               <div className="text-center pt-1 pb-1">
                 <h4 className="text-xl sm:text-2xl font-black text-gray-900 tracking-tight">
-                  Your Love Page is Ready ❤️
+                  Payment Successful ❤️
                 </h4>
                 <p className="text-xs text-gray-500 mt-1">
-                  Your personalized romantic page is unlocked and ready to share with {proposal.recipientName || 'your love'}.
+                  Your LoveLetter is ready.
                 </p>
               </div>
-
-              {/* Free Test Mode notice */}
-              {isFreeTestMode && (
-                <div className="p-3 rounded-2xl bg-amber-50/90 border border-amber-200 text-amber-900 text-xs flex items-center gap-2">
-                  <Info className="w-4 h-4 text-amber-600 flex-shrink-0" />
-                  <span className="font-semibold">FREE TEST MODE — No real payment was made.</span>
-                </div>
-              )}
 
               <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center gap-2">
                 <Check className="w-4 h-4 text-emerald-600 flex-shrink-0" />
