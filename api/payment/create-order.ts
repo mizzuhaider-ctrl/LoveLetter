@@ -1,4 +1,4 @@
-import { recordOrder } from '../../src/server/paymentStore';
+import { recordOrder } from '../_paymentStore';
 
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');

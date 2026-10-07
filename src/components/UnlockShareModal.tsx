@@ -252,27 +252,44 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
       // 2. Create order on the server
       const res = await fetch('/api/create-order', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
         body: JSON.stringify({
           amount: getOrderAmountPaise(),
           currency: 'INR',
-          proposalId: proposal.id,
-          yourName: proposal.yourName,
-          recipientName: proposal.recipientName,
+          proposalId: (proposal.id || '').replace(/[^\w-]/g, '').slice(0, 40),
+          yourName: (proposal.yourName || 'Romantic Creator').replace(/[^\w\s-]/gi, '').slice(0, 40),
+          recipientName: (proposal.recipientName || 'Beloved').replace(/[^\w\s-]/gi, '').slice(0, 40),
         }),
       });
 
-      const orderData = await res.json();
-      const orderId = orderData.order_id || orderData.orderId;
+      // Defensive JSON parsing - never throw "The string did not match the expected pattern" on non-JSON
+      let orderData: any = null;
+      const rawText = await res.text();
+      try {
+        orderData = JSON.parse(rawText);
+      } catch {
+        throw new Error(
+          res.ok
+            ? 'Invalid response format from payment server.'
+            : `Payment server error (${res.status}): ${rawText.slice(0, 100) || res.statusText}`
+        );
+      }
 
-      if (!res.ok || !orderData.success || !orderId) {
+      const orderId = orderData?.order_id || orderData?.orderId;
+
+      if (!res.ok || !orderData?.success || !orderId) {
         setErrorMessage(
-          orderData.message ||
-          orderData.error ||
-          'Razorpay order creation failed: Authentication failed. Please verify your RAZORPAY_KEY_SECRET in .env.'
+          orderData?.message ||
+          orderData?.error ||
+          'Razorpay order creation failed. Please try again.'
         );
         setPaymentStatus('failed');
         return;
+      }
+
+      // Validate orderId format before passing to Razorpay SDK
+      if (typeof orderId !== 'string' || !/^order_[a-zA-Z0-9]+$/.test(orderId)) {
+        throw new Error(`Invalid order ID format received from server (${orderId}).`);
       }
 
       setPaymentStatus('opening_checkout');
@@ -280,6 +297,11 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
       // 3. Initialize Standard Razorpay Checkout with server-created order_id
       const checkoutDescription = 'Premium Love Page Unlock';
       const viteKey = (import.meta as any).env?.VITE_RAZORPAY_KEY_ID;
+
+      // Sanitize prefill name (strip emojis and special characters that cause Razorpay input pattern failure)
+      const sanitizedName = (proposal.yourName || 'Romantic Creator')
+        .replace(/[^\w\s-]/gi, '')
+        .trim() || 'Romantic Creator';
 
       const options: any = {
         key: orderData.keyId || orderData.key || viteKey,
@@ -293,16 +315,21 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
           razorpay_order_id: string;
           razorpay_signature: string;
         }) {
-          // Strictly verify payment on backend!
-          await verifyBackendStatus(response);
+          try {
+            // Strictly verify payment on backend!
+            await verifyBackendStatus(response);
+          } catch (handlerErr: any) {
+            console.error('Handler verification error:', handlerErr);
+            setErrorMessage(handlerErr?.message || 'Payment verification encountered an issue.');
+            setPaymentStatus('verification_failed');
+          }
         },
         prefill: {
-          name: (proposal.yourName || 'Romantic Creator').trim(),
+          name: sanitizedName,
           email: 'romantic@loveletter.app',
-          contact: '9999999999',
         },
         notes: {
-          proposalId: proposal.id,
+          proposalId: (proposal.id || '').replace(/[^\w-]/g, '').slice(0, 40),
           plan: 'PREMIUM',
         },
         theme: {
@@ -346,6 +373,16 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
     setPaymentStatus('verifying');
     setErrorMessage(null);
 
+    const paymentId = (paymentDetails.razorpay_payment_id || '').trim();
+    const orderId = (paymentDetails.razorpay_order_id || '').trim();
+    const signature = (paymentDetails.razorpay_signature || '').trim();
+
+    if (!paymentId || !orderId || !signature) {
+      setPaymentStatus('verification_failed');
+      setErrorMessage('Incomplete payment response from Razorpay.');
+      return;
+    }
+
     const permanentSlug = (proposal.slug && proposal.slug.startsWith('loveletter-'))
       ? proposal.slug
       : generatePermanentSlug(proposal.yourName, proposal.recipientName, proposal.slug || proposal.id);
@@ -353,18 +390,31 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
     try {
       const verifyRes = await fetch('/api/verify-payment', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
         body: JSON.stringify({
-          ...paymentDetails,
-          order_id: paymentDetails.razorpay_order_id,
-          payment_id: paymentDetails.razorpay_payment_id,
-          signature: paymentDetails.razorpay_signature,
+          razorpay_payment_id: paymentId,
+          razorpay_order_id: orderId,
+          razorpay_signature: signature,
+          order_id: orderId,
+          payment_id: paymentId,
+          signature: signature,
           proposalId: proposal.id,
           slug: permanentSlug,
         }),
       });
 
-      const verifyData = await verifyRes.json();
+      // Defensive JSON parsing
+      let verifyData: any = null;
+      const vText = await verifyRes.text();
+      try {
+        verifyData = JSON.parse(vText);
+      } catch {
+        throw new Error(
+          verifyRes.ok
+            ? 'Invalid verification response from server.'
+            : `Verification server error (${verifyRes.status}): ${vText.slice(0, 100) || verifyRes.statusText}`
+        );
+      }
 
       // STRICT BACKEND VERIFICATION CHECK
       if (verifyData.success && verifyData.verified) {
@@ -372,8 +422,8 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
 
         // Record payment strictly bound to this exact proposal ID
         markProposalPaid(proposal.id, {
-          orderId: verifyData.orderId || paymentDetails.razorpay_order_id,
-          paymentId: verifyData.paymentId || paymentDetails.razorpay_payment_id,
+          orderId: verifyData.orderId || orderId,
+          paymentId: verifyData.paymentId || paymentId,
         });
 
         // 2. Save user's personalized LoveLetter data with unlocked status
@@ -389,14 +439,20 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
         // Update browser address bar to permanent link for persistent recovery
         if (typeof window !== 'undefined') {
           try {
-            window.history.replaceState({}, '', `/love/${confirmedSlug}`);
+            window.history.replaceState({}, '', `/love/${encodeURIComponent(confirmedSlug)}`);
           } catch {
             // ignore
           }
         }
 
-        // 3. Construct permanent shareable link
-        const payload = encodeProposalToPayload(unlockedProposal);
+        // 3. Construct permanent shareable link safely
+        let payload = '';
+        try {
+          payload = encodeProposalToPayload(unlockedProposal);
+        } catch {
+          payload = '';
+        }
+
         const permanentLink = `${VERCEL_PRODUCTION_ORIGIN}/love/${confirmedSlug}${payload ? `#${payload}` : ''}`;
         setShareableUrl(permanentLink);
 
@@ -411,7 +467,7 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
     } catch (err: any) {
       console.error('Razorpay payment verification error:', err);
       setPaymentStatus('verification_failed');
-      setErrorMessage('Payment could not be verified due to server error. Link cannot be unlocked.');
+      setErrorMessage(err?.message || 'Payment could not be verified due to server error. Link cannot be unlocked.');
     }
   };
 
