@@ -24,7 +24,7 @@ import {
   ShieldCheck,
   Info,
 } from 'lucide-react';
-import { PAYMENT_CONFIG, getDisplayPrice } from '../config/payment';
+import { PAYMENT_CONFIG, getDisplayPrice, getOrderAmountPaise } from '../config/payment';
 
 declare global {
   interface Window {
@@ -124,6 +124,29 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
     return `${VERCEL_PRODUCTION_ORIGIN}/love/${slug}${payload ? `#${payload}` : ''}`;
   });
 
+  // Ensure UI is never stuck on 'processing' if checkout window is dismissed or closed
+  useEffect(() => {
+    const handleFocusCheck = () => {
+      if (paymentStatus === 'processing' || paymentStatus === 'opening_checkout') {
+        setTimeout(() => {
+          const razorpayModal = document.querySelector('.razorpay-container');
+          if (!razorpayModal) {
+            setPaymentStatus((prev) => {
+              if (prev === 'processing' || prev === 'opening_checkout') {
+                setErrorMessage((msg) => msg || 'Checkout was closed. You can retry anytime to unlock your page.');
+                return 'cancelled';
+              }
+              return prev;
+            });
+          }
+        }, 600);
+      }
+    };
+
+    window.addEventListener('focus', handleFocusCheck);
+    return () => window.removeEventListener('focus', handleFocusCheck);
+  }, [paymentStatus]);
+
   // Fetch Razorpay payment config on modal open
   useEffect(() => {
     if (!isOpen) return;
@@ -214,14 +237,25 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
       return;
     }
 
+    // 1. First ensure Razorpay JS SDK is loaded before initiating
+    setPaymentStatus('opening_checkout');
+    const isLoaded = await loadRazorpaySDK();
+    if (!isLoaded || !window.Razorpay) {
+      setPaymentStatus('failed');
+      setErrorMessage('Razorpay Checkout SDK could not be loaded. Please check your internet connection.');
+      return;
+    }
+
     setPaymentStatus('creating_order');
 
     try {
-      // 1. Create order through secure backend (amount calculated server-side)
-      const res = await fetch('/api/payment/create-order', {
+      // 2. Create order on the server
+      const res = await fetch('/api/create-order', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          amount: getOrderAmountPaise(),
+          currency: 'INR',
           proposalId: proposal.id,
           yourName: proposal.yourName,
           recipientName: proposal.recipientName,
@@ -229,36 +263,31 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
       });
 
       const orderData = await res.json();
+      const orderId = orderData.order_id || orderData.orderId;
 
-      if (!res.ok || !orderData.success || !orderData.orderId) {
-        if (orderData.error === 'Payment setup required' || orderData.message?.includes('credentials')) {
-          setIsSetupRequired(true);
-          setPaymentStatus('idle');
-        } else {
-          setErrorMessage(orderData.message || orderData.error || 'Could not initiate Razorpay order.');
-          setPaymentStatus('failed');
-        }
+      if (!res.ok || !orderData.success || !orderId) {
+        setErrorMessage(
+          orderData.message ||
+          orderData.error ||
+          'Razorpay order creation failed: Authentication failed. Please verify your RAZORPAY_KEY_SECRET in .env.'
+        );
+        setPaymentStatus('failed');
         return;
       }
 
       setPaymentStatus('opening_checkout');
 
-      // 2. Load Razorpay JS SDK
-      const isLoaded = await loadRazorpaySDK();
-      if (!isLoaded || !window.Razorpay) {
-        throw new Error('Razorpay SDK could not be loaded in browser. Please check internet connection.');
-      }
-
-      // 3. Initialize Razorpay Checkout
+      // 3. Initialize Standard Razorpay Checkout with server-created order_id
       const checkoutDescription = 'Premium Love Page Unlock';
+      const viteKey = (import.meta as any).env?.VITE_RAZORPAY_KEY_ID;
 
-      const options = {
-        key: orderData.keyId,
+      const options: any = {
+        key: orderData.keyId || orderData.key || viteKey || 'rzp_test_TkvwNHEK9k3coM',
         amount: orderData.amount, // in paise (6900 paise for ₹69)
         currency: orderData.currency || 'INR',
         name: 'LoveLetter',
         description: checkoutDescription,
-        order_id: orderData.orderId,
+        order_id: orderId,
         handler: async function (response: {
           razorpay_payment_id: string;
           razorpay_order_id: string;
@@ -294,7 +323,8 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
 
       razorpayInstance.on('payment.failed', function (failResp: any) {
         console.warn('Razorpay payment failed:', failResp);
-        setErrorMessage(failResp?.error?.description || 'Payment was unsuccessful or cancelled. No real money was charged.');
+        const failMessage = failResp?.error?.description || failResp?.error?.reason || 'Payment was unsuccessful or cancelled.';
+        setErrorMessage(failMessage);
         setPaymentStatus('failed');
       });
 
@@ -321,11 +351,14 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
       : generatePermanentSlug(proposal.yourName, proposal.recipientName, proposal.slug || proposal.id);
 
     try {
-      const verifyRes = await fetch('/api/payment/verify-payment', {
+      const verifyRes = await fetch('/api/verify-payment', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...paymentDetails,
+          order_id: paymentDetails.razorpay_order_id,
+          payment_id: paymentDetails.razorpay_payment_id,
+          signature: paymentDetails.razorpay_signature,
           proposalId: proposal.id,
           slug: permanentSlug,
         }),
@@ -581,17 +614,22 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
                       <Loader2 className="w-5 h-5 animate-spin" />
                       <span>Creating Razorpay Order...</span>
                     </>
-                  ) : paymentStatus === 'opening_checkout' || paymentStatus === 'processing' ? (
+                  ) : paymentStatus === 'opening_checkout' ? (
                     <>
                       <Loader2 className="w-5 h-5 animate-spin" />
-                      <span>Processing Checkout...</span>
+                      <span>Opening Razorpay Checkout...</span>
                     </>
                   ) : paymentStatus === 'verifying' ? (
                     <>
                       <Loader2 className="w-5 h-5 animate-spin" />
                       <span>Verifying Signature...</span>
                     </>
-                  ) : errorMessage ? (
+                  ) : paymentStatus === 'processing' && !errorMessage ? (
+                    <>
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                      <span>Checkout in Progress...</span>
+                    </>
+                  ) : errorMessage || paymentStatus === 'failed' || paymentStatus === 'cancelled' ? (
                     <>
                       <RefreshCw className="w-4 h-4" />
                       <span>

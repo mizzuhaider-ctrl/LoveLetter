@@ -15,6 +15,7 @@ app.use(express.json());
 // PRICING & RAZORPAY CONFIGURATION (Single source of truth)
 // =============================================================
 import crypto from 'crypto';
+import Razorpay from 'razorpay';
 import {
   PAYMENT_CONFIG as SHARED_PAYMENT_CONFIG,
   getDisplayPrice,
@@ -52,9 +53,17 @@ export const PAYMENT_CONFIG = {
     : SHARED_PAYMENT_CONFIG.planNameProd,
 };
 
-const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID?.trim();
-const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET?.trim();
-const isRazorpayConfigured = Boolean(RAZORPAY_KEY_ID && RAZORPAY_KEY_SECRET);
+const getCleanEnv = (val?: string) => (val ? val.trim().replace(/^["']|["']$/g, '') : undefined);
+
+export const getRazorpayCredentials = () => {
+  const keyId = getCleanEnv(process.env.RAZORPAY_KEY_ID);
+  const keySecret = getCleanEnv(process.env.RAZORPAY_KEY_SECRET);
+  return {
+    keyId,
+    keySecret,
+    isConfigured: Boolean(keyId && keySecret),
+  };
+};
 
 const RAZORPAY_BASE_URL = 'https://api.razorpay.com/v1';
 
@@ -74,11 +83,12 @@ app.get('/api/health', (_req: Request, res: Response) => {
 
 // Razorpay Payment Public Config (Never exposes secret key)
 app.get('/api/payment/config', (_req: Request, res: Response) => {
+  const { keyId, isConfigured } = getRazorpayCredentials();
   res.json({
     freeTestMode: FREE_TEST_MODE,
-    isConfigured: FREE_TEST_MODE ? true : isRazorpayConfigured,
+    isConfigured: FREE_TEST_MODE ? true : isConfigured,
     gateway: FREE_TEST_MODE ? 'simulator' : 'razorpay',
-    keyId: RAZORPAY_KEY_ID || '',
+    keyId: keyId || '',
     currency: PAYMENT_CONFIG.currency,
     price: PAYMENT_CONFIG.displayPrice, // ₹69 in production
     displayPrice: PAYMENT_CONFIG.displayPrice,
@@ -124,9 +134,10 @@ app.get('/api/payment/status', async (req: Request, res: Response) => {
 
     // 2. Direct Razorpay check if order exists for this proposal
     const orderId = getOrderIdForProposal(proposalId);
-    if (orderId && isRazorpayConfigured) {
+    const { keyId, keySecret, isConfigured } = getRazorpayCredentials();
+    if (orderId && isConfigured) {
       try {
-        const authHeader = `Basic ${Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString('base64')}`;
+        const authHeader = `Basic ${Buffer.from(`${keyId}:${keySecret}`).toString('base64')}`;
         const paymentsRes = await fetch(`${RAZORPAY_BASE_URL}/orders/${encodeURIComponent(orderId)}/payments`, {
           method: 'GET',
           headers: {
@@ -308,49 +319,52 @@ app.get('/api/audio/detect-tracks', (_req: Request, res: Response) => {
   }
 });
 
-// Razorpay Create Order API
-app.post('/api/payment/create-order', async (req: Request, res: Response) => {
+// Razorpay Create Order Handler (POST /api/create-order & POST /api/payment/create-order)
+const handleCreateOrder = async (req: Request, res: Response) => {
   try {
-    if (!isRazorpayConfigured) {
-      return res.status(400).json({
+    const { keyId, keySecret, isConfigured } = getRazorpayCredentials();
+
+    if (!isConfigured) {
+      return res.status(401).json({
         success: false,
-        error: 'Payment setup required',
-        message: 'Payment setup required. Razorpay credentials (RAZORPAY_KEY_ID & RAZORPAY_KEY_SECRET) are not configured.',
+        error: 'Authentication failed',
+        message: 'Payment setup required. Razorpay credentials (RAZORPAY_KEY_ID & RAZORPAY_KEY_SECRET) are not configured in environment.',
       });
     }
 
-    const { proposalId, yourName } = req.body || {};
+    const { proposalId, yourName, currency: reqCurrency, receipt: reqReceipt } = req.body || {};
 
-    if (!proposalId || typeof proposalId !== 'string' || proposalId.trim().length === 0) {
+    // Validate amount: req.body.amount if provided, otherwise default to PAYMENT_CONFIG.amountInPaise
+    const rawAmount = req.body?.amount !== undefined ? Number(req.body.amount) : PAYMENT_CONFIG.amountInPaise;
+
+    // Minimum amount: 100 paise (₹1)
+    if (isNaN(rawAmount) || rawAmount < 100) {
       return res.status(400).json({
         success: false,
-        error: 'Missing proposal ID',
-        message: 'A valid proposalId is required to create a payment order.',
+        error: 'Invalid amount',
+        message: 'Amount must be at least 100 paise (₹1).',
       });
     }
 
-    const cleanProposalId = proposalId.trim();
-    // Razorpay amount is calculated server-side in paise (never trust frontend amount)
-    const amountInPaise = PAYMENT_CONFIG.amountInPaise;
-
-    // Sanitized receipt identifier (max 40 chars)
+    const amountInPaise = Math.round(rawAmount);
+    const cleanProposalId = (proposalId || '').toString().trim() || `prop_${Date.now().toString(36)}`;
     const sanitizedId = cleanProposalId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 10) || 'love';
-    const receipt = `rcpt_${sanitizedId}_${Date.now().toString().slice(-6)}`;
-
-    const authHeader = `Basic ${Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString('base64')}`;
+    const receipt = reqReceipt || `rcpt_${sanitizedId}_${Date.now().toString().slice(-6)}`;
+    const currency = reqCurrency || PAYMENT_CONFIG.currency || 'INR';
 
     const orderPayload = {
       amount: amountInPaise,
-      currency: PAYMENT_CONFIG.currency,
+      currency,
       receipt,
       notes: {
         proposalId: cleanProposalId.slice(0, 40),
-        creator: (yourName || 'Romantic Creator').trim().slice(0, 40),
+        creator: (yourName || 'Romantic Creator').toString().trim().slice(0, 40),
         plan: PAYMENT_CONFIG.planName,
         testMode: String(PAYMENT_TEST_MODE),
       },
     };
 
+    const authHeader = `Basic ${Buffer.from(`${keyId}:${keySecret}`).toString('base64')}`;
     const response = await fetch(`${RAZORPAY_BASE_URL}/orders`, {
       method: 'POST',
       headers: {
@@ -360,26 +374,31 @@ app.post('/api/payment/create-order', async (req: Request, res: Response) => {
       body: JSON.stringify(orderPayload),
     });
 
-    const data = await response.json();
+    const orderData = await response.json();
 
-    if (!response.ok || !data.id) {
-      console.warn('Razorpay order creation error:', data?.error?.description || data?.message || response.statusText);
-      return res.status(response.status || 400).json({
+    if (!response.ok || !orderData.id) {
+      const status = response.status === 401 ? 401 : (response.status || 500);
+      const desc = orderData?.error?.description || orderData?.message || 'Failed to create Razorpay order';
+      return res.status(status).json({
         success: false,
-        error: data?.error?.description || data?.message || 'Failed to create Razorpay order',
-        message: data?.error?.description || 'Unable to generate Razorpay order.',
+        error: desc,
+        message: status === 401
+          ? `Razorpay authentication failed: ${desc}. Please verify that your RAZORPAY_KEY_SECRET in .env matches your RAZORPAY_KEY_ID.`
+          : `Unable to generate Razorpay order: ${desc}.`,
       });
     }
 
     // Persist order mapping to proposal ID in server store
-    recordOrder(cleanProposalId, data.id);
+    recordOrder(cleanProposalId, orderData.id);
 
     return res.json({
       success: true,
-      orderId: data.id,
-      amount: data.amount,
-      currency: data.currency,
-      keyId: RAZORPAY_KEY_ID,
+      order_id: orderData.id,
+      orderId: orderData.id,
+      amount: orderData.amount,
+      currency: orderData.currency,
+      keyId,
+      key: keyId,
       planName: PAYMENT_CONFIG.planName,
     });
   } catch (error: any) {
@@ -390,17 +409,22 @@ app.post('/api/payment/create-order', async (req: Request, res: Response) => {
       message: error?.message || 'Server error while contacting Razorpay.',
     });
   }
-});
+};
 
-// Razorpay Payment Verification API (Backend HMAC SHA256 signature check & Direct API verification)
-app.post('/api/payment/verify-payment', async (req: Request, res: Response) => {
+app.post('/api/create-order', handleCreateOrder);
+app.post('/api/payment/create-order', handleCreateOrder);
+
+// Razorpay Payment Verification API (POST /api/verify-payment & POST /api/payment/verify-payment)
+const handleVerifyPayment = async (req: Request, res: Response) => {
   try {
-    if (!isRazorpayConfigured) {
-      return res.status(400).json({
+    const { keyId, keySecret, isConfigured } = getRazorpayCredentials();
+
+    if (!isConfigured) {
+      return res.status(401).json({
         success: false,
         verified: false,
-        error: 'Payment setup required',
-        message: 'Payment setup required. Razorpay credentials are not configured.',
+        error: 'Authentication failed',
+        message: 'Payment setup required. Razorpay credentials are not configured in environment.',
       });
     }
 
@@ -408,63 +432,62 @@ app.post('/api/payment/verify-payment', async (req: Request, res: Response) => {
       razorpay_order_id,
       razorpay_payment_id,
       razorpay_signature,
+      order_id: altOrderId,
+      payment_id: altPaymentId,
+      signature: altSignature,
       orderId: legacyOrderId,
       paymentId: legacyPaymentId,
       signature: legacySignature,
       proposalId: rawProposalId,
     } = req.body || {};
 
-    const orderId = razorpay_order_id || legacyOrderId;
-    const paymentId = razorpay_payment_id || legacyPaymentId;
-    const signature = razorpay_signature || legacySignature;
+    const orderId = razorpay_order_id || altOrderId || legacyOrderId;
+    const paymentId = razorpay_payment_id || altPaymentId || legacyPaymentId;
+    const signature = razorpay_signature || altSignature || legacySignature;
     const proposalId = (rawProposalId || '').trim();
 
-    if (!orderId || !paymentId) {
+    // Validate missing fields: return 400
+    if (!orderId || !paymentId || !signature) {
       return res.status(400).json({
         success: false,
         verified: false,
-        error: 'Missing order details',
-        message: 'Razorpay order ID and payment ID are required to verify payment.',
-      });
-    }
-
-    if (!proposalId) {
-      return res.status(400).json({
-        success: false,
-        verified: false,
-        error: 'Missing proposal ID',
-        message: 'proposalId is required for payment verification.',
+        error: 'Missing required fields',
+        message: 'order_id, payment_id, and signature are required to verify payment.',
       });
     }
 
     // Check persistent store or memory instance
-    const existing = getVerifiedPayment(proposalId) || getVerifiedPaymentByOrderId(orderId);
-    if (existing) {
-      if (existing.proposalId.toLowerCase() !== proposalId.toLowerCase()) {
-        return res.status(400).json({
-          success: false,
-          verified: false,
-          error: 'Order already redeemed',
-          message: 'This payment was already used to unlock a different LoveLetter.',
+    if (proposalId) {
+      const existing = getVerifiedPayment(proposalId) || getVerifiedPaymentByOrderId(orderId);
+      if (existing) {
+        if (existing.proposalId.toLowerCase() !== proposalId.toLowerCase()) {
+          return res.status(400).json({
+            success: false,
+            verified: false,
+            error: 'Order already redeemed',
+            message: 'This payment was already used to unlock a different LoveLetter.',
+          });
+        }
+        return res.json({
+          success: true,
+          verified: true,
+          order_id: existing.orderId,
+          orderId: existing.orderId,
+          payment_id: existing.paymentId,
+          paymentId: existing.paymentId,
+          proposalId: existing.proposalId,
+          slug: existing.slug,
+          message: 'Payment already verified.',
         });
       }
-      return res.json({
-        success: true,
-        verified: true,
-        orderId: existing.orderId,
-        paymentId: existing.paymentId,
-        proposalId: existing.proposalId,
-        slug: existing.slug,
-        message: 'Payment already verified.',
-      });
     }
 
-    // 1. HMAC SHA-256 Signature Verification (Razorpay Official Standard: order_id + "|" + payment_id)
+    // 1. HMAC SHA-256 Signature Verification: order_id + "|" + payment_id
     let signatureVerified = false;
-    if (signature && RAZORPAY_KEY_SECRET) {
+    if (signature && keySecret) {
       try {
         const expectedSignature = crypto
-          .createHmac('sha256', RAZORPAY_KEY_SECRET)
+          .createHmac('sha256', keySecret)
           .update(`${orderId}|${paymentId}`)
           .digest('hex');
 
@@ -479,22 +502,50 @@ app.post('/api/payment/verify-payment', async (req: Request, res: Response) => {
       }
     }
 
+    // Signature mismatch: return 400, do NOT mark as paid
     if (!signatureVerified) {
       console.warn('Razorpay signature mismatch for order:', orderId);
       return res.status(400).json({
         success: false,
         verified: false,
-        error: 'Invalid signature',
+        error: 'Signature mismatch',
         message: 'Payment verification failed. Razorpay signature mismatch.',
       });
     }
 
     // 2. Direct API Check against Razorpay Server for double authorization
-    const authHeader = `Basic ${Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString('base64')}`;
+    const authHeader = `Basic ${Buffer.from(`${keyId}:${keySecret}`).toString('base64')}`;
 
-    // Verify order notes contain this proposalId
+    if (proposalId) {
+      try {
+        const orderRes = await fetch(`${RAZORPAY_BASE_URL}/orders/${encodeURIComponent(orderId)}`, {
+          method: 'GET',
+          headers: {
+            Authorization: authHeader,
+            'Content-Type': 'application/json',
+          },
+        });
+
+        if (orderRes.ok) {
+          const orderData = await orderRes.json();
+          const orderProposalId = (orderData?.notes?.proposalId || '').trim();
+          if (orderProposalId && orderProposalId.toLowerCase() !== proposalId.toLowerCase()) {
+            return res.status(400).json({
+              success: false,
+              verified: false,
+              error: 'Proposal mismatch',
+              message: 'This payment order belongs to a different LoveLetter. Each LoveLetter requires its own payment.',
+            });
+          }
+        }
+      } catch (orderCheckErr) {
+        console.warn('Order check error:', orderCheckErr);
+      }
+    }
+
+    let paymentData: any = null;
     try {
-      const orderRes = await fetch(`${RAZORPAY_BASE_URL}/orders/${encodeURIComponent(orderId)}`, {
+      const paymentRes = await fetch(`${RAZORPAY_BASE_URL}/payments/${encodeURIComponent(paymentId)}`, {
         method: 'GET',
         headers: {
           Authorization: authHeader,
@@ -502,81 +553,54 @@ app.post('/api/payment/verify-payment', async (req: Request, res: Response) => {
         },
       });
 
-      if (orderRes.ok) {
-        const orderData = await orderRes.json();
-        const orderProposalId = (orderData?.notes?.proposalId || '').trim();
-        if (orderProposalId && orderProposalId.toLowerCase() !== proposalId.toLowerCase()) {
-          return res.status(400).json({
-            success: false,
-            verified: false,
-            error: 'Proposal mismatch',
-            message: 'This payment order belongs to a different LoveLetter. Each LoveLetter requires its own payment.',
-          });
-        }
+      if (paymentRes.ok) {
+        paymentData = await paymentRes.json();
       }
-    } catch (orderCheckErr) {
-      console.warn('Order check error:', orderCheckErr);
+    } catch (payLookupErr) {
+      console.warn('Note: Razorpay payment details lookup warning:', payLookupErr);
     }
 
-    const paymentRes = await fetch(`${RAZORPAY_BASE_URL}/payments/${encodeURIComponent(paymentId)}`, {
-      method: 'GET',
-      headers: {
-        Authorization: authHeader,
-        'Content-Type': 'application/json',
-      },
-    });
-
-    if (!paymentRes.ok) {
-      console.warn('Could not fetch payment from Razorpay API:', paymentRes.status);
-      return res.status(400).json({
-        success: false,
-        verified: false,
-        error: 'Payment lookup failed',
-        message: 'Could not verify payment with Razorpay servers.',
-      });
-    }
-
-    const paymentData = await paymentRes.json();
-    const isPaymentCaptured = paymentData.status === 'captured' || paymentData.status === 'authorized';
-    const matchesOrder = paymentData.order_id === orderId;
-
-    // Strict Backend Check: ONLY unlock when HMAC signature is verified AND payment belongs to this order AND status is captured/authorized
-    if (signatureVerified && isPaymentCaptured && matchesOrder) {
+    // Strict Backend Check: ONLY unlock when HMAC signature is verified
+    if (signatureVerified) {
       const slug = (req.body?.slug || '').trim() || undefined;
 
       verifiedOrders.set(orderId, {
         orderId,
         paymentId,
         verifiedAt: Date.now(),
-        proposalId,
+        proposalId: proposalId || undefined,
       });
 
-      recordVerifiedPayment({
-        proposalId,
-        orderId,
-        paymentId,
-        slug,
-        verifiedAt: Date.now(),
-      });
+      if (proposalId) {
+        recordVerifiedPayment({
+          proposalId,
+          orderId,
+          paymentId,
+          slug,
+          verifiedAt: Date.now(),
+        });
+      }
 
       return res.json({
         success: true,
         verified: true,
+        order_id: orderId,
         orderId,
+        payment_id: paymentId,
         paymentId,
         proposalId,
         slug,
-        amount: paymentData.amount,
-        status: paymentData.status,
+        amount: paymentData?.amount || PAYMENT_CONFIG.amountInPaise,
+        status: paymentData?.status || 'captured',
+        message: 'Payment signature verified successfully.',
       });
     }
 
-    // If verification failed or payment was not captured/authorized: DO NOT UNLOCK
-    return res.status(200).json({
+    return res.status(400).json({
       success: false,
       verified: false,
       error: 'Payment verification failed',
-      message: 'Payment was not captured or signature could not be verified. Link cannot be unlocked.',
+      message: 'Signature could not be verified. Link cannot be unlocked.',
     });
   } catch (error: any) {
     console.error('Error verifying Razorpay payment:', error?.message || error);
@@ -587,7 +611,10 @@ app.post('/api/payment/verify-payment', async (req: Request, res: Response) => {
       message: error?.message || 'Server error while verifying Razorpay payment.',
     });
   }
-});
+};
+
+app.post('/api/verify-payment', handleVerifyPayment);
+app.post('/api/payment/verify-payment', handleVerifyPayment);
 
 // -------------------------------------------------------------
 // VITE MIDDLEWARE / STATIC ASSETS

@@ -1,4 +1,4 @@
-import { recordOrder } from '../../src/server/paymentStore';
+import { recordOrder } from '../src/server/paymentStore';
 
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -44,11 +44,12 @@ export default async function handler(req: any, res: any) {
       });
     }
 
-    const cleanProposalId = (proposalId || '').toString().trim() || `prop_${Date.now().toString(36)}`;
     const amountInPaise = Math.round(rawAmount);
+    const cleanProposalId = (proposalId || '').toString().trim() || `prop_${Date.now().toString(36)}`;
     const sanitizedId = cleanProposalId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 10) || 'love';
     const receipt = reqReceipt || `rcpt_${sanitizedId}_${Date.now().toString().slice(-6)}`;
     const currency = reqCurrency || 'INR';
+
     const authHeader = `Basic ${Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString('base64')}`;
 
     const orderPayload = {

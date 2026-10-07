@@ -3,7 +3,7 @@ import {
   recordVerifiedPayment,
   getVerifiedPayment,
   getVerifiedPaymentByOrderId,
-} from '../../src/server/paymentStore';
+} from '../src/server/paymentStore';
 
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -64,37 +64,33 @@ export default async function handler(req: any, res: any) {
       });
     }
 
-    if (!proposalId) {
-      return res.status(400).json({
-        success: false,
-        verified: false,
-        error: 'Missing proposal ID',
-        message: 'proposalId is required for payment verification.',
-      });
-    }
-
     // Idempotent check: if already verified in persistent store
-    const existing = getVerifiedPayment(proposalId) || getVerifiedPaymentByOrderId(orderId);
-    if (existing) {
-      if (existing.proposalId.toLowerCase() !== proposalId.toLowerCase()) {
-        return res.status(400).json({
-          success: false,
-          verified: false,
-          error: 'Order already redeemed',
-          message: 'This payment was already used to unlock a different LoveLetter.',
+    if (proposalId) {
+      const existing = getVerifiedPayment(proposalId) || getVerifiedPaymentByOrderId(orderId);
+      if (existing) {
+        if (existing.proposalId.toLowerCase() !== proposalId.toLowerCase()) {
+          return res.status(400).json({
+            success: false,
+            verified: false,
+            error: 'Order already redeemed',
+            message: 'This payment was already used to unlock a different LoveLetter.',
+          });
+        }
+        return res.status(200).json({
+          success: true,
+          verified: true,
+          order_id: existing.orderId,
+          orderId: existing.orderId,
+          payment_id: existing.paymentId,
+          paymentId: existing.paymentId,
+          proposalId: existing.proposalId,
+          slug: existing.slug,
+          message: 'Payment verified (idempotent).',
         });
       }
-      return res.status(200).json({
-        success: true,
-        verified: true,
-        orderId: existing.orderId,
-        paymentId: existing.paymentId,
-        proposalId: existing.proposalId,
-        slug: existing.slug,
-        message: 'Payment verified (idempotent).',
-      });
     }
 
+    // 1. HMAC SHA-256 Signature Verification
     const payload = `${orderId}|${paymentId}`;
     const expectedSignature = crypto
       .createHmac('sha256', RAZORPAY_KEY_SECRET)
@@ -104,57 +100,30 @@ export default async function handler(req: any, res: any) {
     const expectedBuffer = Buffer.from(expectedSignature, 'utf8');
     const receivedBuffer = Buffer.from(signature, 'utf8');
 
-    let signatureVerified = false;
-    if (expectedBuffer.length === receivedBuffer.length) {
-      signatureVerified = crypto.timingSafeEqual(expectedBuffer, receivedBuffer);
-    }
+    const signatureMatch =
+      expectedBuffer.length === receivedBuffer.length &&
+      crypto.timingSafeEqual(expectedBuffer, receivedBuffer);
 
-    if (!signatureVerified) {
+    if (!signatureMatch) {
       return res.status(400).json({
         success: false,
         verified: false,
-        error: 'Signature verification failed',
-        message: 'Payment verification failed. Razorpay signature mismatch.',
+        error: 'Signature mismatch',
+        message: 'Payment signature could not be verified.',
       });
-    }
-
-    // Verify that the Razorpay order was indeed created for this exact proposalId
-    try {
-      const authHeader = `Basic ${Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString('base64')}`;
-      const orderRes = await fetch(`https://api.razorpay.com/v1/orders/${encodeURIComponent(orderId)}`, {
-        method: 'GET',
-        headers: {
-          Authorization: authHeader,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (orderRes.ok) {
-        const orderData = await orderRes.json();
-        const orderProposalId = (orderData?.notes?.proposalId || '').trim();
-        if (orderProposalId && orderProposalId.toLowerCase() !== proposalId.toLowerCase()) {
-          return res.status(400).json({
-            success: false,
-            verified: false,
-            error: 'Proposal mismatch',
-            message: 'This payment order belongs to a different LoveLetter. Each LoveLetter requires its own payment.',
-          });
-        }
-      }
-    } catch (orderCheckErr) {
-      console.warn('Note: order details lookup warning:', orderCheckErr);
     }
 
     const slug = (body.slug || '').trim() || undefined;
 
-    // Record verified payment in server persistent store
-    recordVerifiedPayment({
-      proposalId,
-      orderId,
-      paymentId,
-      slug,
-      verifiedAt: Date.now(),
-    });
+    if (proposalId) {
+      recordVerifiedPayment({
+        proposalId,
+        orderId,
+        paymentId,
+        slug,
+        verifiedAt: Date.now(),
+      });
+    }
 
     return res.status(200).json({
       success: true,
