@@ -19,13 +19,19 @@
       "orderId": "order_Tkw1TpAhFb1udD",
       "proposalId": "prop_integration_test_live",
       "createdAt": 1791357892514
+    },
+    "order_Tl3iWZCYIblgjw": {
+      "orderId": "order_Tl3iWZCYIblgjw",
+      "proposalId": "prop_live_verification_ready",
+      "createdAt": 1791384988739
     }
   },
   "proposalOrders": {
     "prop_test_suite_1": "order_TkGqLSEREDNU3I",
     "prop_muvdx2r8": "order_TkGqz4YHNfJspj",
     "prop_love_audit_69": "order_test_muxr7l5h_4510d6fe",
-    "prop_integration_test_live": "order_Tkw1TpAhFb1udD"
+    "prop_integration_test_live": "order_Tkw1TpAhFb1udD",
+    "prop_live_verification_ready": "order_Tl3iWZCYIblgjw"
   },
   "verified": {
     "prop_love_audit_69": {

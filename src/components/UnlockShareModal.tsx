@@ -282,7 +282,7 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
       const viteKey = (import.meta as any).env?.VITE_RAZORPAY_KEY_ID;
 
       const options: any = {
-        key: orderData.keyId || orderData.key || viteKey || 'rzp_test_TkvwNHEK9k3coM',
+        key: orderData.keyId || orderData.key || viteKey,
         amount: orderData.amount, // in paise (6900 paise for ₹69)
         currency: orderData.currency || 'INR',
         name: 'LoveLetter',
