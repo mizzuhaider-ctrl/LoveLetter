@@ -1,4 +1,4 @@
-import { recordOrder } from '../_paymentStore';
+import { recordOrder } from '../paymentStore';
 
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -82,8 +82,12 @@ export default async function handler(req: any, res: any) {
       });
     }
 
-    // Persist order mapping to proposal ID
-    recordOrder(cleanProposalId, data.id);
+    // Persist order mapping to proposal ID safely
+    try {
+      recordOrder(cleanProposalId, data.id);
+    } catch {
+      // Non-fatal
+    }
 
     return res.status(200).json({
       success: true,

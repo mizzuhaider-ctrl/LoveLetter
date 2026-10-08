@@ -84,8 +84,13 @@ export async function checkBackendPaymentStatus(proposalId: string): Promise<{
   try {
     const res = await fetch(`/api/payment/status?proposalId=${encodeURIComponent(proposalId)}`);
     if (!res.ok) return { verified: false };
-    const data = await res.json();
-    if (data.verified && data.proposalId.toLowerCase() === proposalId.toLowerCase()) {
+    let data: any = null;
+    try {
+      data = await res.json();
+    } catch {
+      return { verified: false };
+    }
+    if (data && data.verified && data.proposalId && data.proposalId.toLowerCase() === proposalId.toLowerCase()) {
       markProposalPaid(proposalId, {
         orderId: data.orderId,
         paymentId: data.paymentId,
@@ -293,18 +298,21 @@ function utf8ToBase64(str: string): string {
  */
 function base64ToUtf8(base64: string): string {
   try {
-    const binString = atob(base64);
+    if (!base64 || typeof base64 !== 'string') return '';
+    // Normalize URL-safe base64 (- and _) to standard (+ and /)
+    let sanitized = base64.replace(/-/g, '+').replace(/_/g, '/').trim();
+    // Add missing padding
+    while (sanitized.length % 4 !== 0) {
+      sanitized += '=';
+    }
+    const binString = atob(sanitized);
     if (typeof TextDecoder !== 'undefined') {
       const bytes = Uint8Array.from(binString, (m) => m.charCodeAt(0));
       return new TextDecoder().decode(bytes);
     }
     return decodeURIComponent(escape(binString));
   } catch {
-    try {
-      return decodeURIComponent(escape(atob(base64)));
-    } catch {
-      return '';
-    }
+    return '';
   }
 }
 

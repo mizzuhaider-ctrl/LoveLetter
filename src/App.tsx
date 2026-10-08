@@ -95,7 +95,7 @@ export default function App() {
     if (rzpPaymentId && rzpOrderId) {
       fetch('/api/payment/verify-payment', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({
           razorpay_payment_id: rzpPaymentId,
           razorpay_order_id: rzpOrderId,
@@ -103,15 +103,21 @@ export default function App() {
           proposalId: proposal.id,
         }),
       })
-        .then((res) => res.json())
+        .then(async (res) => {
+          try {
+            return await res.json();
+          } catch {
+            return null;
+          }
+        })
         .then((data) => {
-          if (data.success && data.verified) {
+          if (data && data.success && data.verified) {
             markProposalPaid(proposal.id, {
               orderId: rzpOrderId,
               paymentId: rzpPaymentId,
             });
             setProposal((prev) => {
-              const unlocked = { ...prev, isUnlocked: true };
+              const unlocked = { ...prev, isUnlocked: true, slug: data.slug || prev.slug };
               saveProposal(unlocked);
               setLastPaidProposal(unlocked);
               return unlocked;
@@ -119,7 +125,7 @@ export default function App() {
             setIsUnlockModalOpen(true);
           }
         })
-        .catch((err) => console.warn('Razorpay return verification:', err));
+        .catch((err) => console.warn('Razorpay return verification error:', err));
     }
 
     if (isLovePath || queryId || isRecipientParam || isRecipientHash) {

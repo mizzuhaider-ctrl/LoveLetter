@@ -111,7 +111,12 @@ export async function detectAudioTracks(): Promise<AudioTrackConfig> {
   try {
     const res = await fetch('/api/audio/detect-tracks');
     if (res.ok) {
-      const data = await res.json();
+      let data: any = null;
+      try {
+        data = await res.json();
+      } catch {
+        data = null;
+      }
       if (data && data.hindi) {
         detectedTracks = {
           english: data.english || '/assets/i-think-they-call-this-love.mp3',

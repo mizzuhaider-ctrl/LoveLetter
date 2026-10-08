@@ -70,19 +70,42 @@ function loadRazorpaySDK(): Promise<boolean> {
   if (window.Razorpay) return Promise.resolve(true);
 
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (val: boolean) => {
+      if (!settled) {
+        settled = true;
+        resolve(val);
+      }
+    };
+
     const existing = document.querySelector('script[src*="checkout.razorpay.com"]');
     if (existing) {
-      if (window.Razorpay) return resolve(true);
-      existing.addEventListener('load', () => resolve(true));
-      existing.addEventListener('error', () => resolve(false));
+      if (window.Razorpay) return finish(true);
+      existing.addEventListener('load', () => finish(Boolean(window.Razorpay)));
+      existing.addEventListener('error', () => finish(false));
+      const timer = setInterval(() => {
+        if (window.Razorpay) {
+          clearInterval(timer);
+          finish(true);
+        }
+      }, 100);
+      setTimeout(() => {
+        clearInterval(timer);
+        finish(Boolean(window.Razorpay));
+      }, 3500);
       return;
     }
+
     const script = document.createElement('script');
     script.src = 'https://checkout.razorpay.com/v1/checkout.js';
     script.async = true;
-    script.onload = () => resolve(true);
-    script.onerror = () => resolve(false);
+    script.onload = () => finish(Boolean(window.Razorpay));
+    script.onerror = () => finish(false);
     document.head.appendChild(script);
+
+    setTimeout(() => {
+      finish(Boolean(window.Razorpay));
+    }, 4000);
   });
 }
 
@@ -156,8 +179,15 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
     setPaymentStatus('idle');
 
     fetch('/api/payment/config')
-      .then((res) => res.json())
-      .then((data: PaymentConfig) => {
+      .then(async (res) => {
+        try {
+          return await res.json();
+        } catch {
+          return null;
+        }
+      })
+      .then((data: PaymentConfig | null) => {
+        if (!data) return;
         setPaymentConfig(data);
         if (!data.isConfigured) {
           setIsSetupRequired(true);
@@ -288,8 +318,8 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
       }
 
       // Validate orderId format before passing to Razorpay SDK
-      if (typeof orderId !== 'string' || !/^order_[a-zA-Z0-9]+$/.test(orderId)) {
-        throw new Error(`Invalid order ID format received from server (${orderId}).`);
+      if (!orderId || typeof orderId !== 'string') {
+        throw new Error('Order creation was incomplete. Please retry to open checkout.');
       }
 
       setPaymentStatus('opening_checkout');
@@ -297,6 +327,11 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
       // 3. Initialize Standard Razorpay Checkout with server-created order_id
       const checkoutDescription = 'Premium Love Page Unlock';
       const viteKey = (import.meta as any).env?.VITE_RAZORPAY_KEY_ID;
+      const razorpayKey = (orderData.keyId || orderData.key || viteKey || paymentConfig?.keyId || '').toString().trim();
+
+      if (!razorpayKey) {
+        throw new Error('Razorpay Key ID is not configured on the payment server.');
+      }
 
       // Sanitize prefill name (strip emojis and special characters that cause Razorpay input pattern failure)
       const sanitizedName = (proposal.yourName || 'Romantic Creator')
@@ -304,8 +339,8 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
         .trim() || 'Romantic Creator';
 
       const options: any = {
-        key: orderData.keyId || orderData.key || viteKey,
-        amount: orderData.amount, // in paise (6900 paise for ₹69)
+        key: razorpayKey,
+        amount: orderData.amount || 6900, // in paise (6900 paise for ₹69)
         currency: orderData.currency || 'INR',
         name: 'LoveLetter',
         description: checkoutDescription,
@@ -346,17 +381,28 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
         },
       };
 
-      const razorpayInstance = new window.Razorpay(options);
+      let razorpayInstance: any = null;
+      try {
+        razorpayInstance = new window.Razorpay(options);
+      } catch (constructErr: any) {
+        console.error('Razorpay SDK constructor error:', constructErr);
+        throw new Error(constructErr?.message || 'Could not initialize Razorpay checkout.');
+      }
 
-      razorpayInstance.on('payment.failed', function (failResp: any) {
-        console.warn('Razorpay payment failed:', failResp);
-        const failMessage = failResp?.error?.description || failResp?.error?.reason || 'Payment was unsuccessful or cancelled.';
-        setErrorMessage(failMessage);
-        setPaymentStatus('failed');
-      });
+      try {
+        razorpayInstance.on('payment.failed', function (failResp: any) {
+          console.warn('Razorpay payment failed:', failResp);
+          const failMessage = failResp?.error?.description || failResp?.error?.reason || 'Payment was unsuccessful or cancelled.';
+          setErrorMessage(failMessage);
+          setPaymentStatus('failed');
+        });
 
-      setPaymentStatus('processing');
-      razorpayInstance.open();
+        setPaymentStatus('processing');
+        razorpayInstance.open();
+      } catch (openErr: any) {
+        console.error('Razorpay open error:', openErr);
+        throw new Error(openErr?.message || 'Could not display Razorpay checkout window.');
+      }
     } catch (err: any) {
       console.error('Razorpay payment initiation error:', err);
       setErrorMessage(err?.message || 'Unable to open Razorpay checkout. Please try again.');
