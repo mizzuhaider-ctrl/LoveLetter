@@ -200,7 +200,7 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = React.memo(({
         {errorMessage && (
           <div className="mb-5 p-3 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium flex items-center gap-2 animate-shake">
             <AlertCircle className="w-4 h-4 text-rose-500 flex-shrink-0" />
-            <span>{errorMessage}</span>
+            <span>{typeof errorMessage === 'string' ? errorMessage : 'Invalid form entry'}</span>
           </div>
         )}
 

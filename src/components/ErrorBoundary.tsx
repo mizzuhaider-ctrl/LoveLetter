@@ -54,7 +54,11 @@ export class ErrorBoundary extends Component<Props, State> {
             </div>
 
             <p className="text-xs text-gray-500 leading-relaxed">
-              {this.state.error?.message || this.props.fallbackMessage || 'A temporary display issue occurred. Please retry to continue.'}
+              {typeof this.state.error?.message === 'string'
+                ? this.state.error.message
+                : (typeof this.props.fallbackMessage === 'string'
+                    ? this.props.fallbackMessage
+                    : 'A temporary display issue occurred. Please retry to continue.')}
             </p>
 
             <button

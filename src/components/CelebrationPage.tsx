@@ -197,16 +197,16 @@ export const CelebrationPage: React.FC<CelebrationPageProps> = React.memo(({
         >
           <div className="flex items-center gap-2 mb-2 text-rose-500 font-semibold text-xs uppercase tracking-wider">
             <Sparkles className="w-3.5 h-3.5" />
-            <span>Message From {proposal.yourName || 'Me'}:</span>
+            <span>Message From {typeof proposal.yourName === 'string' && proposal.yourName ? proposal.yourName : 'Me'}:</span>
           </div>
 
           <p className="text-gray-800 text-sm sm:text-base leading-relaxed whitespace-pre-wrap font-medium">
-            "{proposal.message}"
+            "{typeof proposal.message === 'string' ? proposal.message : ''}"
           </p>
 
           <div className="mt-3 flex items-center justify-between text-xs text-rose-400/90 font-medium">
             <span>Always & forever</span>
-            <span>💌 {proposal.yourName || 'Love'}</span>
+            <span>💌 {typeof proposal.yourName === 'string' && proposal.yourName ? proposal.yourName : 'Love'}</span>
           </div>
         </div>
 

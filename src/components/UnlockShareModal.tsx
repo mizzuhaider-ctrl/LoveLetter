@@ -109,6 +109,65 @@ function loadRazorpaySDK(): Promise<boolean> {
   });
 }
 
+/**
+ * Safely extracts a user-readable string from any API error, response, or exception.
+ * Guarantees that an Object is NEVER returned or rendered directly as a React child,
+ * preventing Minified React error #31.
+ */
+export function extractErrorMessage(
+  err: unknown,
+  defaultFallback: string = 'Payment could not be completed. Please try again.'
+): string {
+  if (err === null || err === undefined) {
+    return defaultFallback;
+  }
+  if (typeof err === 'string') {
+    const trimmed = err.trim();
+    return trimmed.length > 0 ? trimmed : defaultFallback;
+  }
+  if (typeof err === 'number' || typeof err === 'boolean') {
+    return String(err);
+  }
+  if (typeof err === 'object') {
+    const obj = err as Record<string, any>;
+    // Check known string fields in priority order
+    if (typeof obj.description === 'string' && obj.description.trim()) {
+      return obj.description.trim();
+    }
+    if (typeof obj.message === 'string' && obj.message.trim()) {
+      return obj.message.trim();
+    }
+    if (typeof obj.error === 'string' && obj.error.trim()) {
+      return obj.error.trim();
+    }
+    if (typeof obj.reason === 'string' && obj.reason.trim()) {
+      return obj.reason.trim();
+    }
+    // Nested error object: e.g. { error: { description: "...", message: "..." } }
+    if (obj.error && typeof obj.error === 'object') {
+      const nested = extractErrorMessage(obj.error, '');
+      if (nested) return nested;
+    }
+    // Nested message object: e.g. { message: { text: "..." } }
+    if (obj.message && typeof obj.message === 'object') {
+      const nested = extractErrorMessage(obj.message, '');
+      if (nested) return nested;
+    }
+    if (typeof obj.code === 'string' && obj.code.trim()) {
+      return `Error (${obj.code.trim()})`;
+    }
+    try {
+      const json = JSON.stringify(obj);
+      if (json && json !== '{}') {
+        return json;
+      }
+    } catch {
+      // Fall through to fallback
+    }
+  }
+  return defaultFallback;
+}
+
 type PaymentStatusState =
   | 'idle'
   | 'creating_order'
@@ -308,11 +367,11 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
       const orderId = orderData?.order_id || orderData?.orderId;
 
       if (!res.ok || !orderData?.success || !orderId) {
-        setErrorMessage(
-          orderData?.message ||
-          orderData?.error ||
+        const safeOrderError = extractErrorMessage(
+          orderData?.message || orderData?.error || orderData,
           'Razorpay order creation failed. Please try again.'
         );
+        setErrorMessage(safeOrderError);
         setPaymentStatus('failed');
         return;
       }
@@ -355,7 +414,11 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
             await verifyBackendStatus(response);
           } catch (handlerErr: any) {
             console.error('Handler verification error:', handlerErr);
-            setErrorMessage(handlerErr?.message || 'Payment verification encountered an issue.');
+            const safeVerificationError = extractErrorMessage(
+              handlerErr,
+              'Payment verification encountered an issue. Please try again.'
+            );
+            setErrorMessage(safeVerificationError);
             setPaymentStatus('verification_failed');
           }
         },
@@ -392,7 +455,10 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
       try {
         razorpayInstance.on('payment.failed', function (failResp: any) {
           console.warn('Razorpay payment failed:', failResp);
-          const failMessage = failResp?.error?.description || failResp?.error?.reason || 'Payment was unsuccessful or cancelled.';
+          const failMessage = extractErrorMessage(
+            failResp?.error || failResp,
+            'Payment was unsuccessful or cancelled.'
+          );
           setErrorMessage(failMessage);
           setPaymentStatus('failed');
         });
@@ -405,7 +471,11 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
       }
     } catch (err: any) {
       console.error('Razorpay payment initiation error:', err);
-      setErrorMessage(err?.message || 'Unable to open Razorpay checkout. Please try again.');
+      const safeInitError = extractErrorMessage(
+        err,
+        'Unable to open Razorpay checkout. Please try again.'
+      );
+      setErrorMessage(safeInitError);
       setPaymentStatus('failed');
     }
   };
@@ -508,12 +578,20 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
       } else {
         // Payment was not verified: DO NOT UNLOCK
         setPaymentStatus('verification_failed');
-        setErrorMessage(verifyData.message || 'Payment could not be verified. Link cannot be unlocked.');
+        const safeVerifyError = extractErrorMessage(
+          verifyData?.message || verifyData?.error || verifyData,
+          'Payment could not be verified. Link cannot be unlocked.'
+        );
+        setErrorMessage(safeVerifyError);
       }
     } catch (err: any) {
       console.error('Razorpay payment verification error:', err);
       setPaymentStatus('verification_failed');
-      setErrorMessage(err?.message || 'Payment could not be verified due to server error. Link cannot be unlocked.');
+      const safeVerifyError = extractErrorMessage(
+        err,
+        'Payment could not be verified due to server error. Link cannot be unlocked.'
+      );
+      setErrorMessage(safeVerifyError);
     }
   };
 
@@ -679,7 +757,7 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
                     </span>
                   </div>
                   <p className="text-xs text-rose-600 font-medium">
-                    {errorMessage}
+                    {extractErrorMessage(errorMessage, 'Payment could not be completed. Please try again.')}
                   </p>
                   <p className="text-[11px] text-gray-500">
                     Your proposal data is safe. Please retry to unlock your permanent link.
