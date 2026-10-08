@@ -70,11 +70,24 @@ const PAID_PREFIX = 'love_page_paid_';
 const LAST_PAID_KEY = 'love_page_last_paid';
 const memoryPaidProposals = new Set<string>();
 
+export function getPaidDetails(proposalId: string): { orderId?: string; paymentId?: string } | null {
+  if (!proposalId) return null;
+  try {
+    const raw = localStorage.getItem(`${PAID_PREFIX}${proposalId}`);
+    if (raw) {
+      return JSON.parse(raw);
+    }
+  } catch {
+    // Ignore error
+  }
+  return null;
+}
+
 /**
  * Checks server-side persistent store and Razorpay API directly for verified payment status.
  * Backend remains the authoritative single source of truth.
  */
-export async function checkBackendPaymentStatus(proposalId: string): Promise<{
+export async function checkBackendPaymentStatus(proposalId: string, optionalOrderId?: string): Promise<{
   verified: boolean;
   orderId?: string;
   paymentId?: string;
@@ -82,15 +95,18 @@ export async function checkBackendPaymentStatus(proposalId: string): Promise<{
 }> {
   if (!proposalId) return { verified: false };
   try {
-    const res = await fetch(`/api/payment/status?proposalId=${encodeURIComponent(proposalId)}`);
-    if (!res.ok) return { verified: false };
+    const paidDetails = getPaidDetails(proposalId);
+    const orderIdToQuery = optionalOrderId || paidDetails?.orderId || '';
+    const queryParam = orderIdToQuery ? `&orderId=${encodeURIComponent(orderIdToQuery)}` : '';
+    const res = await fetch(`/api/payment/status?proposalId=${encodeURIComponent(proposalId)}${queryParam}`);
+    if (!res.ok) return { verified: isProposalPaid(proposalId), orderId: paidDetails?.orderId, paymentId: paidDetails?.paymentId };
     let data: any = null;
     try {
       data = await res.json();
     } catch {
-      return { verified: false };
+      return { verified: isProposalPaid(proposalId), orderId: paidDetails?.orderId, paymentId: paidDetails?.paymentId };
     }
-    if (data && data.verified && data.proposalId && data.proposalId.toLowerCase() === proposalId.toLowerCase()) {
+    if (data && data.verified) {
       markProposalPaid(proposalId, {
         orderId: data.orderId,
         paymentId: data.paymentId,

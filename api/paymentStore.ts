@@ -84,8 +84,8 @@ export function recordOrder(proposalId: string, orderId: string): void {
   try {
     if (!proposalId || !orderId) return;
     loadStore();
-    const cleanProposalId = proposalId.trim();
-    const cleanOrderId = orderId.trim();
+    const cleanProposalId = String(proposalId).trim();
+    const cleanOrderId = String(orderId).trim();
 
     const record: OrderRecord = {
       orderId: cleanOrderId,
@@ -105,8 +105,8 @@ export function recordVerifiedPayment(payment: PaymentRecord): void {
   try {
     if (!payment || !payment.proposalId || !payment.orderId) return;
     loadStore();
-    const cleanProposalId = payment.proposalId.trim();
-    const cleanOrderId = payment.orderId.trim();
+    const cleanProposalId = String(payment.proposalId).trim();
+    const cleanOrderId = String(payment.orderId).trim();
 
     const cleanPayment: PaymentRecord = {
       ...payment,
@@ -127,7 +127,7 @@ export function getVerifiedPayment(proposalId: string): PaymentRecord | null {
   try {
     if (!proposalId) return null;
     loadStore();
-    const cleanProposalId = proposalId.trim();
+    const cleanProposalId = String(proposalId).trim();
     return memoryStore.verified[cleanProposalId] || null;
   } catch {
     return null;
@@ -138,7 +138,7 @@ export function getVerifiedPaymentByOrderId(orderId: string): PaymentRecord | nu
   try {
     if (!orderId) return null;
     loadStore();
-    const cleanOrderId = orderId.trim();
+    const cleanOrderId = String(orderId).trim();
     return memoryStore.verifiedByOrder[cleanOrderId] || null;
   } catch {
     return null;
@@ -149,7 +149,7 @@ export function getOrderIdForProposal(proposalId: string): string | null {
   try {
     if (!proposalId) return null;
     loadStore();
-    const cleanProposalId = proposalId.trim();
+    const cleanProposalId = String(proposalId).trim();
     return memoryStore.proposalOrders[cleanProposalId] || null;
   } catch {
     return null;
@@ -160,9 +160,16 @@ export function getProposalIdForOrder(orderId: string): string | null {
   try {
     if (!orderId) return null;
     loadStore();
-    const cleanOrderId = orderId.trim();
+    const cleanOrderId = String(orderId).trim();
     return memoryStore.orders[cleanOrderId]?.proposalId || null;
   } catch {
     return null;
   }
+}
+
+export default function handler(_req: any, res: any) {
+  if (res && typeof res.status === 'function') {
+    return res.status(200).json({ status: 'ok', service: 'paymentStore' });
+  }
+  return { status: 'ok' };
 }

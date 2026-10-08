@@ -85,64 +85,88 @@ function persistStore(): void {
 }
 
 export function recordOrder(proposalId: string, orderId: string): void {
-  if (!proposalId || !orderId) return;
-  loadStore();
-  const cleanProposalId = proposalId.trim();
-  const cleanOrderId = orderId.trim();
+  try {
+    if (!proposalId || !orderId) return;
+    loadStore();
+    const cleanProposalId = String(proposalId).trim();
+    const cleanOrderId = String(orderId).trim();
 
-  const record: OrderRecord = {
-    orderId: cleanOrderId,
-    proposalId: cleanProposalId,
-    createdAt: Date.now(),
-  };
+    const record: OrderRecord = {
+      orderId: cleanOrderId,
+      proposalId: cleanProposalId,
+      createdAt: Date.now(),
+    };
 
-  memoryStore.orders[cleanOrderId] = record;
-  memoryStore.proposalOrders[cleanProposalId] = cleanOrderId;
-  persistStore();
+    memoryStore.orders[cleanOrderId] = record;
+    memoryStore.proposalOrders[cleanProposalId] = cleanOrderId;
+    persistStore();
+  } catch {
+    // Fail silently, never crash order creation
+  }
 }
 
 export function recordVerifiedPayment(payment: PaymentRecord): void {
-  if (!payment || !payment.proposalId || !payment.orderId) return;
-  loadStore();
-  const cleanProposalId = payment.proposalId.trim();
-  const cleanOrderId = payment.orderId.trim();
+  try {
+    if (!payment || !payment.proposalId || !payment.orderId) return;
+    loadStore();
+    const cleanProposalId = String(payment.proposalId).trim();
+    const cleanOrderId = String(payment.orderId).trim();
 
-  const cleanPayment: PaymentRecord = {
-    ...payment,
-    proposalId: cleanProposalId,
-    orderId: cleanOrderId,
-    verifiedAt: payment.verifiedAt || Date.now(),
-  };
+    const cleanPayment: PaymentRecord = {
+      ...payment,
+      proposalId: cleanProposalId,
+      orderId: cleanOrderId,
+      verifiedAt: payment.verifiedAt || Date.now(),
+    };
 
-  memoryStore.verified[cleanProposalId] = cleanPayment;
-  memoryStore.verifiedByOrder[cleanOrderId] = cleanPayment;
-  persistStore();
+    memoryStore.verified[cleanProposalId] = cleanPayment;
+    memoryStore.verifiedByOrder[cleanOrderId] = cleanPayment;
+    persistStore();
+  } catch {
+    // Fail silently, never crash payment verification
+  }
 }
 
 export function getVerifiedPayment(proposalId: string): PaymentRecord | null {
-  if (!proposalId) return null;
-  loadStore();
-  const cleanProposalId = proposalId.trim();
-  return memoryStore.verified[cleanProposalId] || null;
+  try {
+    if (!proposalId) return null;
+    loadStore();
+    const cleanProposalId = String(proposalId).trim();
+    return memoryStore.verified[cleanProposalId] || null;
+  } catch {
+    return null;
+  }
 }
 
 export function getVerifiedPaymentByOrderId(orderId: string): PaymentRecord | null {
-  if (!orderId) return null;
-  loadStore();
-  const cleanOrderId = orderId.trim();
-  return memoryStore.verifiedByOrder[cleanOrderId] || null;
+  try {
+    if (!orderId) return null;
+    loadStore();
+    const cleanOrderId = String(orderId).trim();
+    return memoryStore.verifiedByOrder[cleanOrderId] || null;
+  } catch {
+    return null;
+  }
 }
 
 export function getOrderIdForProposal(proposalId: string): string | null {
-  if (!proposalId) return null;
-  loadStore();
-  const cleanProposalId = proposalId.trim();
-  return memoryStore.proposalOrders[cleanProposalId] || null;
+  try {
+    if (!proposalId) return null;
+    loadStore();
+    const cleanProposalId = String(proposalId).trim();
+    return memoryStore.proposalOrders[cleanProposalId] || null;
+  } catch {
+    return null;
+  }
 }
 
 export function getProposalIdForOrder(orderId: string): string | null {
-  if (!orderId) return null;
-  loadStore();
-  const cleanOrderId = orderId.trim();
-  return memoryStore.orders[cleanOrderId]?.proposalId || null;
+  try {
+    if (!orderId) return null;
+    loadStore();
+    const cleanOrderId = String(orderId).trim();
+    return memoryStore.orders[cleanOrderId]?.proposalId || null;
+  } catch {
+    return null;
+  }
 }

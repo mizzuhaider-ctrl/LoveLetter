@@ -102,7 +102,7 @@ app.get('/api/payment/config', (_req: Request, res: Response) => {
 // Persistent Payment Status API: Single source of truth for payment recovery
 app.get('/api/payment/status', async (req: Request, res: Response) => {
   try {
-    const proposalId = (
+    const proposalId = String(
       (req.query.proposalId as string) ||
       (req.body?.proposalId as string) ||
       ''
@@ -358,7 +358,7 @@ const handleCreateOrder = async (req: Request, res: Response) => {
       receipt,
       notes: {
         proposalId: cleanProposalId.slice(0, 40),
-        creator: (yourName || 'Romantic Creator').toString().trim().slice(0, 40),
+        creator: (yourName || 'Romantic Creator').toString().replace(/[^\w\s-]/gi, '').trim().slice(0, 40) || 'Romantic Creator',
         plan: PAYMENT_CONFIG.planName,
         testMode: String(PAYMENT_TEST_MODE),
       },
@@ -441,10 +441,10 @@ const handleVerifyPayment = async (req: Request, res: Response) => {
       proposalId: rawProposalId,
     } = req.body || {};
 
-    const orderId = razorpay_order_id || altOrderId || legacyOrderId;
-    const paymentId = razorpay_payment_id || altPaymentId || legacyPaymentId;
-    const signature = razorpay_signature || altSignature || legacySignature;
-    const proposalId = (rawProposalId || '').trim();
+    const orderId = String(razorpay_order_id || altOrderId || legacyOrderId || '').trim();
+    const paymentId = String(razorpay_payment_id || altPaymentId || legacyPaymentId || '').trim();
+    const signature = String(razorpay_signature || altSignature || legacySignature || '').trim();
+    const proposalId = String(rawProposalId || '').trim();
 
     // Validate missing fields: return 400
     if (!orderId || !paymentId || !signature) {
@@ -460,7 +460,7 @@ const handleVerifyPayment = async (req: Request, res: Response) => {
     if (proposalId) {
       const existing = getVerifiedPayment(proposalId) || getVerifiedPaymentByOrderId(orderId);
       if (existing) {
-        if (existing.proposalId.toLowerCase() !== proposalId.toLowerCase()) {
+        if (existing.proposalId && proposalId && existing.proposalId.toLowerCase() !== proposalId.toLowerCase()) {
           return res.status(400).json({
             success: false,
             verified: false,
@@ -528,8 +528,8 @@ const handleVerifyPayment = async (req: Request, res: Response) => {
 
         if (orderRes.ok) {
           const orderData = await orderRes.json();
-          const orderProposalId = (orderData?.notes?.proposalId || '').trim();
-          if (orderProposalId && orderProposalId.toLowerCase() !== proposalId.toLowerCase()) {
+          const orderProposalId = String(orderData?.notes?.proposalId || '').trim();
+          if (orderProposalId && proposalId && orderProposalId.toLowerCase() !== proposalId.toLowerCase()) {
             return res.status(400).json({
               success: false,
               verified: false,

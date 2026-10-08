@@ -274,8 +274,8 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
       setErrorMessage(null);
     }
 
-    // Authoritative backend verification check
-    if (isOpen && proposal.id) {
+    // Check authoritative backend verification if modal opened while proposal appears locked
+    if (isOpen && proposal.id && !proposal.isUnlocked) {
       checkBackendPaymentStatus(proposal.id).then((status) => {
         if (status.verified) {
           const confirmedSlug = status.slug || slug;
@@ -291,19 +291,6 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
           setShareableUrl(`${VERCEL_PRODUCTION_ORIGIN}/love/${confirmedSlug}${confirmedPayload ? `#${confirmedPayload}` : ''}`);
           setStep('success');
           setPaymentStatus('success');
-        } else {
-          // Immediately force isUnlocked = false
-          // Do NOT show the paid/celebration/unlocked state
-          // Remove the localStorage key: love_page_paid_${proposalId}
-          clearProposalPaid(proposal.id);
-          const locked: LoveProposal = {
-            ...proposal,
-            isUnlocked: false,
-          };
-          saveProposal(locked);
-          onUnlocked(locked);
-          setStep('plan');
-          setPaymentStatus('idle');
         }
       });
     }

@@ -50,10 +50,10 @@ export default async function handler(req: any, res: any) {
       proposalId: rawProposalId,
     } = body;
 
-    const orderId = razorpay_order_id || altOrderId || legacyOrderId;
-    const paymentId = razorpay_payment_id || altPaymentId || legacyPaymentId;
-    const signature = razorpay_signature || altSignature || legacySignature;
-    const proposalId = (rawProposalId || '').trim();
+    const orderId = String(razorpay_order_id || altOrderId || legacyOrderId || '').trim();
+    const paymentId = String(razorpay_payment_id || altPaymentId || legacyPaymentId || '').trim();
+    const signature = String(razorpay_signature || altSignature || legacySignature || '').trim();
+    const proposalId = String(rawProposalId || '').trim();
 
     if (!orderId || !paymentId || !signature) {
       return res.status(400).json({
@@ -68,7 +68,7 @@ export default async function handler(req: any, res: any) {
     if (proposalId) {
       const existing = getVerifiedPayment(proposalId) || getVerifiedPaymentByOrderId(orderId);
       if (existing) {
-        if (existing.proposalId.toLowerCase() !== proposalId.toLowerCase()) {
+        if (existing.proposalId && proposalId && existing.proposalId.toLowerCase() !== proposalId.toLowerCase()) {
           return res.status(400).json({
             success: false,
             verified: false,

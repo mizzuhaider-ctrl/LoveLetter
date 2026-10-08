@@ -58,7 +58,7 @@ export default async function handler(req: any, res: any) {
       receipt,
       notes: {
         proposalId: cleanProposalId.slice(0, 40),
-        creator: (yourName || 'Romantic Creator').toString().trim().slice(0, 40),
+        creator: (yourName || 'Romantic Creator').toString().replace(/[^\w\s-]/gi, '').trim().slice(0, 40) || 'Romantic Creator',
         plan: 'PREMIUM',
       },
     };
