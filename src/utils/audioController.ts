@@ -352,6 +352,7 @@ export function toggleMusic(): void {
       // MUTE: set volume to 0. DO NOT call audio.pause(). Audio keeps running silently.
       audio.volume = 0;
       audio.muted = true;
+      wasPlayingBeforeCheckout = false;
     } else {
       // UNMUTE: restore volume to 0.7. Resume audible sound at exact current position.
       audio.muted = false;
@@ -367,6 +368,73 @@ export function toggleMusic(): void {
   }
 
   notifyListeners();
+}
+
+/**
+ * Track whether background music was actively playing prior to opening Razorpay Checkout.
+ */
+let wasPlayingBeforeCheckout = false;
+
+/**
+ * Immediately pause background music when the customer clicks the ₹69 unlock/payment button,
+ * before opening Razorpay Checkout.
+ *
+ * 1. Truly pauses (audio.pause()), not merely muting.
+ * 2. Only marks wasPlayingBeforeCheckout = true if the music was actively playing and audible.
+ * 3. Respects customer preference if music was already muted or paused.
+ */
+export function pauseForCheckout(): boolean {
+  if (audioElement && !audioElement.paused && !isMuted && audioElement.volume > 0) {
+    wasPlayingBeforeCheckout = true;
+    audioElement.pause();
+    notifyListeners();
+    return true;
+  }
+
+  wasPlayingBeforeCheckout = false;
+  if (audioElement && !audioElement.paused) {
+    audioElement.pause();
+    notifyListeners();
+  }
+  return false;
+}
+
+/**
+ * Resumes background music automatically if it was playing before checkout.
+ *
+ * 1. Automatically resumes if wasPlayingBeforeCheckout was true and not muted.
+ * 2. Continues directly from paused position without resetting currentTime.
+ * 3. If customer had already muted or paused music, respects that preference.
+ */
+export function resumeAfterCheckout(): void {
+  if (wasPlayingBeforeCheckout && audioElement && !isMuted) {
+    wasPlayingBeforeCheckout = false;
+    audioElement.muted = false;
+    const vol = (activeTrackUrl && activeTrackUrl.includes('Ishq_Wala_Love'))
+      ? applyHindiCrossfadeTransition(audioElement.currentTime, 0.7)
+      : 0.7;
+    audioElement.volume = vol;
+    audioElement.play().catch((err) => {
+      console.warn('Could not resume audio after checkout:', err);
+    });
+    notifyListeners();
+  } else {
+    wasPlayingBeforeCheckout = false;
+  }
+}
+
+/**
+ * Clears checkout audio state (called when payment succeeds).
+ */
+export function clearCheckoutAudioState(): void {
+  wasPlayingBeforeCheckout = false;
+}
+
+/**
+ * Checks whether music was paused specifically for checkout.
+ */
+export function isCheckoutAudioPaused(): boolean {
+  return wasPlayingBeforeCheckout;
 }
 
 /**

@@ -25,6 +25,12 @@ import {
   Info,
 } from 'lucide-react';
 import { PAYMENT_CONFIG, getDisplayPrice, getOrderAmountPaise } from '../config/payment';
+import {
+  pauseForCheckout,
+  resumeAfterCheckout,
+  clearCheckoutAudioState,
+  isCheckoutAudioPaused,
+} from '../utils/audioController';
 
 declare global {
   interface Window {
@@ -216,6 +222,7 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
             setPaymentStatus((prev) => {
               if (prev === 'processing' || prev === 'opening_checkout') {
                 setErrorMessage((msg) => msg || 'Checkout was closed. You can retry anytime to unlock your page.');
+                resumeAfterCheckout();
                 return 'cancelled';
               }
               return prev;
@@ -228,6 +235,15 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
     window.addEventListener('focus', handleFocusCheck);
     return () => window.removeEventListener('focus', handleFocusCheck);
   }, [paymentStatus]);
+
+  // Clean up checkout audio pause state if modal unmounts unexpectedly while paused
+  useEffect(() => {
+    return () => {
+      if (isCheckoutAudioPaused()) {
+        resumeAfterCheckout();
+      }
+    };
+  }, []);
 
   // Fetch Razorpay payment config on modal open
   useEffect(() => {
@@ -313,12 +329,16 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
       return;
     }
 
+    // Immediately pause background music when customer clicks unlock/payment button
+    pauseForCheckout();
+
     // 1. First ensure Razorpay JS SDK is loaded before initiating
     setPaymentStatus('opening_checkout');
     const isLoaded = await loadRazorpaySDK();
     if (!isLoaded || !window.Razorpay) {
       setPaymentStatus('failed');
       setErrorMessage('Razorpay Checkout SDK could not be loaded. Please check your internet connection.');
+      resumeAfterCheckout();
       return;
     }
 
@@ -360,6 +380,7 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
         );
         setErrorMessage(safeOrderError);
         setPaymentStatus('failed');
+        resumeAfterCheckout();
         return;
       }
 
@@ -397,6 +418,8 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
           razorpay_signature: string;
         }) {
           try {
+            // Clear checkout audio pause state so dismissal does not treat this as cancellation
+            clearCheckoutAudioState();
             // Strictly verify payment on backend!
             await verifyBackendStatus(response);
           } catch (handlerErr: any) {
@@ -425,6 +448,7 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
             setPaymentStatus((prev) => {
               if (prev === 'verifying' || prev === 'success') return prev;
               setErrorMessage('Payment was cancelled or closed. You can retry anytime to unlock your page.');
+              resumeAfterCheckout();
               return 'cancelled';
             });
           },
@@ -448,6 +472,7 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
           );
           setErrorMessage(failMessage);
           setPaymentStatus('failed');
+          resumeAfterCheckout();
         });
 
         setPaymentStatus('processing');
@@ -464,6 +489,7 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
       );
       setErrorMessage(safeInitError);
       setPaymentStatus('failed');
+      resumeAfterCheckout();
     }
   };
 
@@ -636,6 +662,13 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
     window.open('https://www.instagram.com/', '_blank', 'noopener,noreferrer');
   };
 
+  const handleModalClose = () => {
+    if (isCheckoutAudioPaused()) {
+      resumeAfterCheckout();
+    }
+    onClose();
+  };
+
   const isActionDisabled =
     paymentStatus === 'creating_order' ||
     paymentStatus === 'opening_checkout' ||
@@ -661,7 +694,7 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleModalClose}
             className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500 flex items-center justify-center transition cursor-pointer"
           >
             <X className="w-4 h-4" />
