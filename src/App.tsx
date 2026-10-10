@@ -93,7 +93,7 @@ export default function App() {
 
     // Handle return from Razorpay checkout if redirected
     if (rzpPaymentId && rzpOrderId) {
-      fetch('/api/payment/verify-payment', {
+      fetch('/api/verify-payment', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({
@@ -154,7 +154,7 @@ export default function App() {
 
           // Always verify with authoritative server backend
           if (decoded.id) {
-            checkBackendPaymentStatus(decoded.id).then((status) => {
+            checkBackendPaymentStatus(decoded.id, (decoded as any).orderId).then((status) => {
               if (status.verified) {
                 setProposal((prev) => ({
                   ...prev,

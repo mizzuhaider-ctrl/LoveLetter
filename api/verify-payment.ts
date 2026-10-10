@@ -31,7 +31,7 @@ export default async function handler(req: any, res: any) {
       success: false,
       verified: false,
       error: 'Authentication failed',
-      message: 'Payment setup required. Razorpay credentials are not configured.',
+      message: 'Payment setup required. Razorpay credentials are not configured in environment variables.',
     });
   }
 
@@ -85,12 +85,13 @@ export default async function handler(req: any, res: any) {
           paymentId: existing.paymentId,
           proposalId: existing.proposalId,
           slug: existing.slug,
+          amount: 6900,
           message: 'Payment verified (idempotent).',
         });
       }
     }
 
-    // 1. HMAC SHA-256 Signature Verification
+    // 1. Genuine HMAC SHA-256 Signature Verification: order_id + "|" + payment_id
     const payload = `${orderId}|${paymentId}`;
     const expectedSignature = crypto
       .createHmac('sha256', RAZORPAY_KEY_SECRET)
@@ -109,12 +110,55 @@ export default async function handler(req: any, res: any) {
         success: false,
         verified: false,
         error: 'Signature mismatch',
-        message: 'Payment signature could not be verified.',
+        message: 'Payment signature could not be verified. Razorpay signature mismatch.',
       });
+    }
+
+    // 2. Validate Order & Amount against Razorpay API
+    const authHeader = `Basic ${Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString('base64')}`;
+
+    try {
+      const orderRes = await fetch(`https://api.razorpay.com/v1/orders/${encodeURIComponent(orderId)}`, {
+        method: 'GET',
+        headers: {
+          Authorization: authHeader,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (orderRes.ok) {
+        const orderData = await orderRes.json();
+        const orderProposalId = String(orderData?.notes?.proposalId || '').trim();
+        const cleanPid = proposalId.toLowerCase();
+        const cleanOrderPid = orderProposalId.toLowerCase();
+
+        // Validate proposal association
+        if (orderProposalId && proposalId && cleanOrderPid !== cleanPid && !cleanPid.startsWith(cleanOrderPid) && !cleanOrderPid.startsWith(cleanPid)) {
+          return res.status(400).json({
+            success: false,
+            verified: false,
+            error: 'Proposal mismatch',
+            message: 'This payment order belongs to a different LoveLetter. Each LoveLetter requires its own payment.',
+          });
+        }
+
+        // Validate amount (6900 paise = ₹69)
+        if (orderData.amount && orderData.amount !== 6900) {
+          return res.status(400).json({
+            success: false,
+            verified: false,
+            error: 'Invalid payment amount',
+            message: `Payment amount of ₹${orderData.amount / 100} does not match the required price of ₹69.`,
+          });
+        }
+      }
+    } catch (orderCheckErr) {
+      console.warn('Note: Razorpay live order lookup notice:', orderCheckErr);
     }
 
     const slug = (body.slug || '').trim() || undefined;
 
+    // 3. Record verified payment in store
     if (proposalId) {
       recordVerifiedPayment({
         proposalId,
@@ -134,6 +178,7 @@ export default async function handler(req: any, res: any) {
       paymentId,
       proposalId,
       slug,
+      amount: 6900,
       message: 'Payment signature verified successfully.',
     });
   } catch (error: any) {

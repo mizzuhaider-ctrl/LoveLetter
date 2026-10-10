@@ -33,24 +33,11 @@ import {
  * Server-side payment configuration derived directly from src/config/payment.ts
  * Single source of truth.
  */
-export const FREE_TEST_MODE = SHARED_PAYMENT_CONFIG.FREE_TEST_MODE;
-export const PAYMENT_TEST_MODE = SHARED_PAYMENT_CONFIG.PAYMENT_TEST_MODE;
-export const DISPLAY_PRICE = getDisplayPrice(PAYMENT_TEST_MODE, FREE_TEST_MODE);
-export const TEST_PAYMENT_AMOUNT = SHARED_PAYMENT_CONFIG.TEST_PAYMENT_AMOUNT;
-export const PRODUCTION_PRICE = SHARED_PAYMENT_CONFIG.PRODUCTION_PRICE;
-
 export const PAYMENT_CONFIG = {
-  freeTestMode: FREE_TEST_MODE,
-  testMode: PAYMENT_TEST_MODE,
-  displayPrice: DISPLAY_PRICE,
-  /** Internal amount sent to Razorpay in paise from getOrderAmountPaise() */
-  amountInPaise: getOrderAmountPaise(PAYMENT_TEST_MODE),
-  currency: SHARED_PAYMENT_CONFIG.currency,
-  planName: FREE_TEST_MODE
-    ? `${SHARED_PAYMENT_CONFIG.planNameTest} (FREE TEST MODE)`
-    : PAYMENT_TEST_MODE
-    ? `${SHARED_PAYMENT_CONFIG.planNameTest} (TEST MODE)`
-    : SHARED_PAYMENT_CONFIG.planNameProd,
+  displayPrice: 69,
+  amountInPaise: 6900,
+  currency: 'INR',
+  planName: 'PREMIUM',
 };
 
 const getCleanEnv = (val?: string) => (val ? val.trim().replace(/^["']|["']$/g, '') : undefined);
@@ -85,16 +72,12 @@ app.get('/api/health', (_req: Request, res: Response) => {
 app.get('/api/payment/config', (_req: Request, res: Response) => {
   const { keyId, isConfigured } = getRazorpayCredentials();
   res.json({
-    freeTestMode: FREE_TEST_MODE,
-    isConfigured: FREE_TEST_MODE ? true : isConfigured,
-    gateway: FREE_TEST_MODE ? 'simulator' : 'razorpay',
+    isConfigured,
     keyId: keyId || '',
     currency: PAYMENT_CONFIG.currency,
-    price: PAYMENT_CONFIG.displayPrice, // ₹69 in production
+    price: PAYMENT_CONFIG.displayPrice, // ₹69
     displayPrice: PAYMENT_CONFIG.displayPrice,
-    testMode: PAYMENT_TEST_MODE,
-    simulatedTestAmount: PAYMENT_TEST_MODE ? (TEST_PAYMENT_AMOUNT / 100) : 0, // ₹1 test amount
-    amountInPaise: PAYMENT_CONFIG.amountInPaise,
+    amountInPaise: PAYMENT_CONFIG.amountInPaise, // 6900 paise
     planName: PAYMENT_CONFIG.planName,
   });
 });
@@ -176,6 +159,63 @@ app.get('/api/payment/status', async (req: Request, res: Response) => {
       }
     }
 
+    // 3. Fallback: If orderId was not in memory, query recent Razorpay orders by notes.proposalId
+    if (!orderId && isConfigured && keyId && keySecret) {
+      try {
+        const authHeader = `Basic ${Buffer.from(`${keyId}:${keySecret}`).toString('base64')}`;
+        const ordersRes = await fetch(`${RAZORPAY_BASE_URL}/orders?count=25`, {
+          method: 'GET',
+          headers: {
+            Authorization: authHeader,
+            'Content-Type': 'application/json',
+          },
+        });
+
+        if (ordersRes.ok) {
+          const ordersData = await ordersRes.json();
+          const items = ordersData.items || [];
+          const cleanPid = proposalId.toLowerCase();
+          const matchingOrder = items.find((o: any) => {
+            const pId = String(o?.notes?.proposalId || '').trim().toLowerCase();
+            return pId && (pId === cleanPid || cleanPid.startsWith(pId) || pId.startsWith(cleanPid));
+          });
+
+          if (matchingOrder && (matchingOrder.status === 'paid' || (matchingOrder.amount_paid && matchingOrder.amount_paid > 0))) {
+            const paymentsRes = await fetch(`${RAZORPAY_BASE_URL}/orders/${encodeURIComponent(matchingOrder.id)}/payments`, {
+              method: 'GET',
+              headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
+            });
+            let paymentId = matchingOrder.id;
+            if (paymentsRes.ok) {
+              const payData = await paymentsRes.json();
+              const captured = (payData.items || []).find((p: any) => p.status === 'captured' || p.status === 'authorized');
+              if (captured) paymentId = captured.id;
+            }
+
+            const record = {
+              proposalId,
+              orderId: matchingOrder.id,
+              paymentId,
+              verifiedAt: Date.now(),
+            };
+            recordVerifiedPayment(record);
+
+            return res.json({
+              success: true,
+              verified: true,
+              proposalId,
+              orderId: matchingOrder.id,
+              paymentId,
+              verifiedAt: record.verifiedAt,
+              message: 'Payment confirmed via Razorpay orders search.',
+            });
+          }
+        }
+      } catch (searchErr) {
+        console.warn('Note: Razorpay live orders search error:', searchErr);
+      }
+    }
+
     return res.json({
       success: true,
       verified: false,
@@ -193,53 +233,6 @@ app.get('/api/payment/status', async (req: Request, res: Response) => {
   }
 });
 
-// Free Test Mode Backend Unlock API (Simulation only for development/testing without Razorpay KYC)
-app.post('/api/payment/free-test-unlock', async (req: Request, res: Response) => {
-  try {
-    // Security check: Only allowed if FREE_TEST_MODE is enabled on server
-    if (!FREE_TEST_MODE) {
-      return res.status(403).json({
-        success: false,
-        verified: false,
-        error: 'Free test mode is disabled',
-        message: 'Free test mode is disabled on this server. Please use standard Razorpay checkout.',
-      });
-    }
-
-    const { proposalId, yourName, recipientName } = req.body || {};
-    const randomHex = crypto.randomBytes(4).toString('hex');
-    const orderId = `FREE_TEST_${Date.now()}_${randomHex}`;
-    const paymentId = `pay_sim_${randomHex}`;
-
-    // Mark test order as verified only through backend cache
-    verifiedOrders.set(orderId, {
-      orderId,
-      paymentId,
-      verifiedAt: Date.now(),
-      proposalId,
-    });
-
-    return res.json({
-      success: true,
-      verified: true,
-      orderId,
-      paymentId,
-      proposalId: proposalId || '',
-      creator: yourName || '',
-      recipient: recipientName || '',
-      mode: 'FREE_TEST_MODE',
-      message: 'FREE TEST MODE — No real payment was made. Test authorization verified.',
-    });
-  } catch (error: any) {
-    console.error('Error in free-test-unlock:', error);
-    return res.status(500).json({
-      success: false,
-      verified: false,
-      error: 'Test unlock failed',
-      message: 'Could not complete free test authorization.',
-    });
-  }
-});
 
 // Audio Tracks Auto-Detection API (Detects uploaded Hindi MP3 and preserves English)
 app.get('/api/audio/detect-tracks', (_req: Request, res: Response) => {
@@ -334,19 +327,8 @@ const handleCreateOrder = async (req: Request, res: Response) => {
 
     const { proposalId, yourName, currency: reqCurrency, receipt: reqReceipt } = req.body || {};
 
-    // Validate amount: req.body.amount if provided, otherwise default to PAYMENT_CONFIG.amountInPaise
-    const rawAmount = req.body?.amount !== undefined ? Number(req.body.amount) : PAYMENT_CONFIG.amountInPaise;
-
-    // Minimum amount: 100 paise (₹1)
-    if (isNaN(rawAmount) || rawAmount < 100) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid amount',
-        message: 'Amount must be at least 100 paise (₹1).',
-      });
-    }
-
-    const amountInPaise = Math.round(rawAmount);
+    // Strict pricing: exactly ₹69 = 6900 paise. Server-enforced.
+    const amountInPaise = 6900;
     const cleanProposalId = (proposalId || '').toString().trim() || `prop_${Date.now().toString(36)}`;
     const sanitizedId = cleanProposalId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 10) || 'love';
     const receipt = reqReceipt || `rcpt_${sanitizedId}_${Date.now().toString().slice(-6)}`;
@@ -360,7 +342,6 @@ const handleCreateOrder = async (req: Request, res: Response) => {
         proposalId: cleanProposalId.slice(0, 40),
         creator: (yourName || 'Romantic Creator').toString().replace(/[^\w\s-]/gi, '').trim().slice(0, 40) || 'Romantic Creator',
         plan: PAYMENT_CONFIG.planName,
-        testMode: String(PAYMENT_TEST_MODE),
       },
     };
 
@@ -529,12 +510,24 @@ const handleVerifyPayment = async (req: Request, res: Response) => {
         if (orderRes.ok) {
           const orderData = await orderRes.json();
           const orderProposalId = String(orderData?.notes?.proposalId || '').trim();
-          if (orderProposalId && proposalId && orderProposalId.toLowerCase() !== proposalId.toLowerCase()) {
+          const cleanPid = proposalId.toLowerCase();
+          const cleanOrderPid = orderProposalId.toLowerCase();
+
+          if (orderProposalId && proposalId && cleanOrderPid !== cleanPid && !cleanPid.startsWith(cleanOrderPid) && !cleanOrderPid.startsWith(cleanPid)) {
             return res.status(400).json({
               success: false,
               verified: false,
               error: 'Proposal mismatch',
               message: 'This payment order belongs to a different LoveLetter. Each LoveLetter requires its own payment.',
+            });
+          }
+
+          if (orderData.amount && orderData.amount !== 6900) {
+            return res.status(400).json({
+              success: false,
+              verified: false,
+              error: 'Invalid payment amount',
+              message: `Payment amount does not match the required price of ₹69.`,
             });
           }
         }

@@ -1,6 +1,3 @@
-import fs from 'fs';
-import path from 'path';
-
 export interface PaymentRecord {
   proposalId: string;
   orderId: string;
@@ -22,68 +19,25 @@ interface StoreData {
   verifiedByOrder: Record<string, PaymentRecord>;
 }
 
-// Global in-memory cache preserved across warm Lambda invocations
-const memoryStore: StoreData = {
-  orders: {},
-  proposalOrders: {},
-  verified: {},
-  verifiedByOrder: {},
+// In-memory store attached to globalThis to survive across module reloads in warm lambdas
+const globalScope = globalThis as unknown as {
+  __loveletter_payment_store?: StoreData;
 };
 
-function getDataFilePath(): string | null {
-  try {
-    const tmpDir = path.resolve('/tmp', '.loveletter_data');
-    if (!fs.existsSync(tmpDir)) {
-      try {
-        fs.mkdirSync(tmpDir, { recursive: true });
-      } catch {
-        return null;
-      }
-    }
-    return path.join(tmpDir, 'verified_payments.json');
-  } catch {
-    return null;
-  }
+if (!globalScope.__loveletter_payment_store) {
+  globalScope.__loveletter_payment_store = {
+    orders: {},
+    proposalOrders: {},
+    verified: {},
+    verifiedByOrder: {},
+  };
 }
 
-let isLoaded = false;
-
-function loadStore(): StoreData {
-  if (isLoaded) return memoryStore;
-  try {
-    const filePath = getDataFilePath();
-    if (filePath && fs.existsSync(filePath)) {
-      const raw = fs.readFileSync(filePath, 'utf8');
-      if (raw && raw.trim().length > 0) {
-        const parsed = JSON.parse(raw);
-        memoryStore.orders = parsed.orders || {};
-        memoryStore.proposalOrders = parsed.proposalOrders || {};
-        memoryStore.verified = parsed.verified || {};
-        memoryStore.verifiedByOrder = parsed.verifiedByOrder || {};
-      }
-    }
-  } catch {
-    // Graceful in-memory fallback
-  }
-  isLoaded = true;
-  return memoryStore;
-}
-
-function persistStore(): void {
-  try {
-    const filePath = getDataFilePath();
-    if (!filePath) return;
-    const data = JSON.stringify(memoryStore, null, 2);
-    fs.writeFileSync(filePath, data, 'utf8');
-  } catch {
-    // In-memory persistence is preserved
-  }
-}
+const memoryStore: StoreData = globalScope.__loveletter_payment_store;
 
 export function recordOrder(proposalId: string, orderId: string): void {
   try {
     if (!proposalId || !orderId) return;
-    loadStore();
     const cleanProposalId = String(proposalId).trim();
     const cleanOrderId = String(orderId).trim();
 
@@ -95,7 +49,6 @@ export function recordOrder(proposalId: string, orderId: string): void {
 
     memoryStore.orders[cleanOrderId] = record;
     memoryStore.proposalOrders[cleanProposalId] = cleanOrderId;
-    persistStore();
   } catch {
     // Fail silently, never crash order creation
   }
@@ -104,7 +57,6 @@ export function recordOrder(proposalId: string, orderId: string): void {
 export function recordVerifiedPayment(payment: PaymentRecord): void {
   try {
     if (!payment || !payment.proposalId || !payment.orderId) return;
-    loadStore();
     const cleanProposalId = String(payment.proposalId).trim();
     const cleanOrderId = String(payment.orderId).trim();
 
@@ -117,7 +69,6 @@ export function recordVerifiedPayment(payment: PaymentRecord): void {
 
     memoryStore.verified[cleanProposalId] = cleanPayment;
     memoryStore.verifiedByOrder[cleanOrderId] = cleanPayment;
-    persistStore();
   } catch {
     // Fail silently, never crash payment verification
   }
@@ -126,7 +77,6 @@ export function recordVerifiedPayment(payment: PaymentRecord): void {
 export function getVerifiedPayment(proposalId: string): PaymentRecord | null {
   try {
     if (!proposalId) return null;
-    loadStore();
     const cleanProposalId = String(proposalId).trim();
     return memoryStore.verified[cleanProposalId] || null;
   } catch {
@@ -137,7 +87,6 @@ export function getVerifiedPayment(proposalId: string): PaymentRecord | null {
 export function getVerifiedPaymentByOrderId(orderId: string): PaymentRecord | null {
   try {
     if (!orderId) return null;
-    loadStore();
     const cleanOrderId = String(orderId).trim();
     return memoryStore.verifiedByOrder[cleanOrderId] || null;
   } catch {
@@ -148,7 +97,6 @@ export function getVerifiedPaymentByOrderId(orderId: string): PaymentRecord | nu
 export function getOrderIdForProposal(proposalId: string): string | null {
   try {
     if (!proposalId) return null;
-    loadStore();
     const cleanProposalId = String(proposalId).trim();
     return memoryStore.proposalOrders[cleanProposalId] || null;
   } catch {
@@ -159,7 +107,6 @@ export function getOrderIdForProposal(proposalId: string): string | null {
 export function getProposalIdForOrder(orderId: string): string | null {
   try {
     if (!orderId) return null;
-    loadStore();
     const cleanOrderId = String(orderId).trim();
     return memoryStore.orders[cleanOrderId]?.proposalId || null;
   } catch {

@@ -1,6 +1,3 @@
-import fs from 'fs';
-import path from 'path';
-
 export interface PaymentRecord {
   proposalId: string;
   orderId: string;
@@ -22,72 +19,25 @@ interface StoreData {
   verifiedByOrder: Record<string, PaymentRecord>; // orderId -> PaymentRecord
 }
 
-// In-memory cache
-const memoryStore: StoreData = {
-  orders: {},
-  proposalOrders: {},
-  verified: {},
-  verifiedByOrder: {},
+// Global in-memory cache preserved across warm invocations
+const globalScope = globalThis as unknown as {
+  __loveletter_payment_store?: StoreData;
 };
 
-// Choose writable path: .data or /tmp/.data
-function getDataFilePath(): string {
-  try {
-    const localDir = path.resolve(process.cwd(), '.data');
-    if (!fs.existsSync(localDir)) {
-      fs.mkdirSync(localDir, { recursive: true });
-    }
-    return path.join(localDir, 'verified_payments.json');
-  } catch {
-    const tmpDir = path.resolve('/tmp', '.loveletter_data');
-    if (!fs.existsSync(tmpDir)) {
-      try {
-        fs.mkdirSync(tmpDir, { recursive: true });
-      } catch {
-        // ignore
-      }
-    }
-    return path.join(tmpDir, 'verified_payments.json');
-  }
+if (!globalScope.__loveletter_payment_store) {
+  globalScope.__loveletter_payment_store = {
+    orders: {},
+    proposalOrders: {},
+    verified: {},
+    verifiedByOrder: {},
+  };
 }
 
-let isLoaded = false;
-
-function loadStore(): StoreData {
-  if (isLoaded) return memoryStore;
-  try {
-    const filePath = getDataFilePath();
-    if (fs.existsSync(filePath)) {
-      const raw = fs.readFileSync(filePath, 'utf8');
-      if (raw && raw.trim().length > 0) {
-        const parsed = JSON.parse(raw);
-        memoryStore.orders = parsed.orders || {};
-        memoryStore.proposalOrders = parsed.proposalOrders || {};
-        memoryStore.verified = parsed.verified || {};
-        memoryStore.verifiedByOrder = parsed.verifiedByOrder || {};
-      }
-    }
-  } catch (err) {
-    console.warn('Note: Could not read payment store from disk:', err);
-  }
-  isLoaded = true;
-  return memoryStore;
-}
-
-function persistStore(): void {
-  try {
-    const filePath = getDataFilePath();
-    const data = JSON.stringify(memoryStore, null, 2);
-    fs.writeFileSync(filePath, data, 'utf8');
-  } catch (err) {
-    console.warn('Note: Could not write payment store to disk:', err);
-  }
-}
+const memoryStore: StoreData = globalScope.__loveletter_payment_store;
 
 export function recordOrder(proposalId: string, orderId: string): void {
   try {
     if (!proposalId || !orderId) return;
-    loadStore();
     const cleanProposalId = String(proposalId).trim();
     const cleanOrderId = String(orderId).trim();
 
@@ -99,7 +49,6 @@ export function recordOrder(proposalId: string, orderId: string): void {
 
     memoryStore.orders[cleanOrderId] = record;
     memoryStore.proposalOrders[cleanProposalId] = cleanOrderId;
-    persistStore();
   } catch {
     // Fail silently, never crash order creation
   }
@@ -108,7 +57,6 @@ export function recordOrder(proposalId: string, orderId: string): void {
 export function recordVerifiedPayment(payment: PaymentRecord): void {
   try {
     if (!payment || !payment.proposalId || !payment.orderId) return;
-    loadStore();
     const cleanProposalId = String(payment.proposalId).trim();
     const cleanOrderId = String(payment.orderId).trim();
 
@@ -121,7 +69,6 @@ export function recordVerifiedPayment(payment: PaymentRecord): void {
 
     memoryStore.verified[cleanProposalId] = cleanPayment;
     memoryStore.verifiedByOrder[cleanOrderId] = cleanPayment;
-    persistStore();
   } catch {
     // Fail silently, never crash payment verification
   }
@@ -130,7 +77,6 @@ export function recordVerifiedPayment(payment: PaymentRecord): void {
 export function getVerifiedPayment(proposalId: string): PaymentRecord | null {
   try {
     if (!proposalId) return null;
-    loadStore();
     const cleanProposalId = String(proposalId).trim();
     return memoryStore.verified[cleanProposalId] || null;
   } catch {
@@ -141,7 +87,6 @@ export function getVerifiedPayment(proposalId: string): PaymentRecord | null {
 export function getVerifiedPaymentByOrderId(orderId: string): PaymentRecord | null {
   try {
     if (!orderId) return null;
-    loadStore();
     const cleanOrderId = String(orderId).trim();
     return memoryStore.verifiedByOrder[cleanOrderId] || null;
   } catch {
@@ -152,7 +97,6 @@ export function getVerifiedPaymentByOrderId(orderId: string): PaymentRecord | nu
 export function getOrderIdForProposal(proposalId: string): string | null {
   try {
     if (!proposalId) return null;
-    loadStore();
     const cleanProposalId = String(proposalId).trim();
     return memoryStore.proposalOrders[cleanProposalId] || null;
   } catch {
@@ -163,7 +107,6 @@ export function getOrderIdForProposal(proposalId: string): string | null {
 export function getProposalIdForOrder(orderId: string): string | null {
   try {
     if (!orderId) return null;
-    loadStore();
     const cleanOrderId = String(orderId).trim();
     return memoryStore.orders[cleanOrderId]?.proposalId || null;
   } catch {

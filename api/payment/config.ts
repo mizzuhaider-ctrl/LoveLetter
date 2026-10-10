@@ -8,18 +8,16 @@ export default function handler(req: any, res: any) {
     return res.status(200).end();
   }
 
-  const keyId = process.env.RAZORPAY_KEY_ID || '';
-  const keySecret = process.env.RAZORPAY_KEY_SECRET || '';
+  const keyId = (process.env.RAZORPAY_KEY_ID || '').trim();
+  const keySecret = (process.env.RAZORPAY_KEY_SECRET || '').trim();
   const isConfigured = Boolean(keyId && keySecret);
 
   return res.status(200).json({
-    freeTestMode: false,
-    isConfigured: isConfigured,
-    keyId: keyId,
+    isConfigured,
+    keyId,
     currency: 'INR',
     price: 69,
     displayPrice: 69,
-    testMode: false,
     amountInPaise: 6900,
     planName: 'PREMIUM',
   });

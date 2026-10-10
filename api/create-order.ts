@@ -25,30 +25,20 @@ export default async function handler(req: any, res: any) {
     return res.status(401).json({
       success: false,
       error: 'Authentication failed',
-      message: 'Payment setup required. Razorpay credentials are not configured.',
+      message: 'Payment setup required. Razorpay credentials (RAZORPAY_KEY_ID & RAZORPAY_KEY_SECRET) are not configured in environment variables.',
     });
   }
 
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
-    const { proposalId, yourName, currency: reqCurrency, receipt: reqReceipt } = body;
+    const { proposalId, yourName, receipt: reqReceipt } = body;
 
-    const rawAmount = body.amount !== undefined ? Number(body.amount) : 6900;
-
-    // Minimum amount: 100 paise (₹1)
-    if (isNaN(rawAmount) || rawAmount < 100) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid amount',
-        message: 'Amount must be at least 100 paise (₹1).',
-      });
-    }
-
-    const amountInPaise = Math.round(rawAmount);
+    // Strict pricing: exactly ₹69 = 6900 paise. Server-enforced.
+    const amountInPaise = 6900;
     const cleanProposalId = (proposalId || '').toString().trim() || `prop_${Date.now().toString(36)}`;
     const sanitizedId = cleanProposalId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 10) || 'love';
     const receipt = reqReceipt || `rcpt_${sanitizedId}_${Date.now().toString().slice(-6)}`;
-    const currency = reqCurrency || 'INR';
+    const currency = 'INR';
 
     const authHeader = `Basic ${Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString('base64')}`;
 
@@ -76,26 +66,25 @@ export default async function handler(req: any, res: any) {
 
     if (!response.ok || !data.id) {
       const status = response.status === 401 ? 401 : (response.status || 500);
+      const desc = data?.error?.description || data?.message || 'Failed to create Razorpay order';
       return res.status(status).json({
         success: false,
-        error: data?.error?.description || data?.message || 'Failed to create Razorpay order',
-        message: data?.error?.description || 'Unable to generate Razorpay order. Please check your Razorpay credentials in .env.',
+        error: desc,
+        message: status === 401
+          ? 'Razorpay credentials authentication failed. Please verify your RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET.'
+          : (desc || 'Unable to generate Razorpay order. Please try again.'),
       });
     }
 
-    // Persist order mapping to proposal ID safely
-    try {
-      recordOrder(cleanProposalId, data.id);
-    } catch {
-      // Non-fatal
-    }
+    // Persist order mapping to proposal ID safely in store
+    recordOrder(cleanProposalId, data.id);
 
     return res.status(200).json({
       success: true,
       order_id: data.id,
       orderId: data.id,
-      amount: data.amount,
-      currency: data.currency,
+      amount: 6900,
+      currency: 'INR',
       keyId: RAZORPAY_KEY_ID,
       key: RAZORPAY_KEY_ID,
       planName: 'PREMIUM',

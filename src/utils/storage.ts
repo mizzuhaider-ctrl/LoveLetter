@@ -338,6 +338,10 @@ function base64ToUtf8(base64: string): string {
  */
 export function encodeProposalToPayload(proposal: LoveProposal): string {
   try {
+    const paidDetails = getPaidDetails(proposal.id);
+    const orderId = (proposal as any).orderId || paidDetails?.orderId || undefined;
+    const paymentId = (proposal as any).paymentId || paidDetails?.paymentId || undefined;
+
     const payload = {
       i: proposal.id,
       r: proposal.recipientName,
@@ -348,6 +352,8 @@ export function encodeProposalToPayload(proposal: LoveProposal): string {
       s: proposal.slug,
       u: proposal.isUnlocked ? 1 : 0,
       ml: proposal.musicLanguage || 'hindi',
+      o: orderId,
+      pay: paymentId,
       // If photoUrl is small (dataUrl < 100KB) or external url, include it
       p: proposal.photoUrl && proposal.photoUrl.length < 150000 ? proposal.photoUrl : undefined,
     };
@@ -360,7 +366,7 @@ export function encodeProposalToPayload(proposal: LoveProposal): string {
   }
 }
 
-export function decodeProposalFromPayload(payloadStr: string): Partial<LoveProposal> | null {
+export function decodeProposalFromPayload(payloadStr: string): (Partial<LoveProposal> & { orderId?: string; paymentId?: string }) | null {
   try {
     if (!payloadStr) return null;
     const cleanB64 = decodeURIComponent(payloadStr);
@@ -378,6 +384,8 @@ export function decodeProposalFromPayload(payloadStr: string): Partial<LovePropo
       isUnlocked: parsed.u === 1,
       musicLanguage: parsed.ml === 'english' ? 'english' : 'hindi',
       photoUrl: parsed.p,
+      orderId: parsed.o || undefined,
+      paymentId: parsed.pay || undefined,
       createdAt: Date.now(),
     };
   } catch (err) {
