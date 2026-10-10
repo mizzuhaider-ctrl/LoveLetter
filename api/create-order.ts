@@ -1,4 +1,4 @@
-import { recordOrder } from './paymentStore';
+import { recordOrder } from './paymentStore.js';
 
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -22,6 +22,7 @@ export default async function handler(req: any, res: any) {
   const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET?.trim();
 
   if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
+    console.error('[Diagnostic] create-order missing Razorpay credentials in environment.');
     return res.status(401).json({
       success: false,
       error: 'Authentication failed',
@@ -67,6 +68,7 @@ export default async function handler(req: any, res: any) {
     if (!response.ok || !data.id) {
       const status = response.status === 401 ? 401 : (response.status || 500);
       const desc = data?.error?.description || data?.message || 'Failed to create Razorpay order';
+      console.error(`[Diagnostic] Razorpay order creation failed with status ${status}:`, desc);
       return res.status(status).json({
         success: false,
         error: desc,
@@ -90,6 +92,7 @@ export default async function handler(req: any, res: any) {
       planName: 'PREMIUM',
     });
   } catch (error: any) {
+    console.error('[Diagnostic] Error in /api/create-order handler:', error?.message || error);
     return res.status(500).json({
       success: false,
       error: 'Order creation failed',

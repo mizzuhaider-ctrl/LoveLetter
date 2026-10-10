@@ -114,9 +114,11 @@ export function getProposalIdForOrder(orderId: string): string | null {
   }
 }
 
-export default function handler(_req: any, res: any) {
+export async function handler(_req: any, res: any) {
   if (res && typeof res.status === 'function') {
     return res.status(200).json({ status: 'ok', service: 'paymentStore' });
   }
   return { status: 'ok' };
 }
+
+export default handler;

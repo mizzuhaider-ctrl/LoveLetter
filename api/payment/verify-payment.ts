@@ -1,1 +1,1 @@
-export { default } from '../verify-payment';
+export { default } from '../verify-payment.js';

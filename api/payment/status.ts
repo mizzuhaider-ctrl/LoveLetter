@@ -2,7 +2,7 @@ import {
   getVerifiedPayment,
   getOrderIdForProposal,
   recordVerifiedPayment,
-} from '../paymentStore';
+} from '../paymentStore.js';
 
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -86,8 +86,8 @@ export default async function handler(req: any, res: any) {
             });
           }
         }
-      } catch (checkErr) {
-        console.warn('Note: Razorpay live order lookup error:', checkErr);
+      } catch (checkErr: any) {
+        console.warn('[Diagnostic] Note: Razorpay live order lookup error in /api/payment/status:', checkErr?.message || checkErr);
       }
     }
 
@@ -136,15 +136,15 @@ export default async function handler(req: any, res: any) {
               success: true,
               verified: true,
               proposalId,
-              orderId: matchingOrder.id,
+              orderId,
               paymentId,
               verifiedAt: record.verifiedAt,
               message: 'Payment confirmed via Razorpay orders search.',
             });
           }
         }
-      } catch (searchErr) {
-        console.warn('Note: Razorpay live orders search error:', searchErr);
+      } catch (searchErr: any) {
+        console.warn('[Diagnostic] Note: Razorpay live orders search error in /api/payment/status:', searchErr?.message || searchErr);
       }
     }
 
@@ -156,11 +156,11 @@ export default async function handler(req: any, res: any) {
       message: 'No verified payment found for this LoveLetter.',
     });
   } catch (error: any) {
-    console.error('Payment status lookup error:', error);
+    console.error('[Diagnostic] Error in /api/payment/status handler:', error?.message || error);
     return res.status(200).json({
       success: true,
       verified: false,
-      message: 'Could not confirm payment status at this time.',
+      message: 'Could not query payment status from backend.',
     });
   }
 }

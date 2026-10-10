@@ -3,7 +3,7 @@ import {
   recordVerifiedPayment,
   getVerifiedPayment,
   getVerifiedPaymentByOrderId,
-} from './paymentStore';
+} from './paymentStore.js';
 
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -27,6 +27,7 @@ export default async function handler(req: any, res: any) {
   const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET?.trim();
 
   if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
+    console.error('[Diagnostic] verify-payment missing Razorpay credentials in environment.');
     return res.status(401).json({
       success: false,
       verified: false,
@@ -56,6 +57,7 @@ export default async function handler(req: any, res: any) {
     const proposalId = String(rawProposalId || '').trim();
 
     if (!orderId || !paymentId || !signature) {
+      console.warn('[Diagnostic] verify-payment called with missing required fields.');
       return res.status(400).json({
         success: false,
         verified: false,
@@ -69,6 +71,7 @@ export default async function handler(req: any, res: any) {
       const existing = getVerifiedPayment(proposalId) || getVerifiedPaymentByOrderId(orderId);
       if (existing) {
         if (existing.proposalId && proposalId && existing.proposalId.toLowerCase() !== proposalId.toLowerCase()) {
+          console.warn('[Diagnostic] verify-payment duplicate redemption attempt for different proposal.');
           return res.status(400).json({
             success: false,
             verified: false,
@@ -106,6 +109,7 @@ export default async function handler(req: any, res: any) {
       crypto.timingSafeEqual(expectedBuffer, receivedBuffer);
 
     if (!signatureMatch) {
+      console.warn('[Diagnostic] verify-payment HMAC SHA-256 signature mismatch.');
       return res.status(400).json({
         success: false,
         verified: false,
@@ -134,6 +138,7 @@ export default async function handler(req: any, res: any) {
 
         // Validate proposal association
         if (orderProposalId && proposalId && cleanOrderPid !== cleanPid && !cleanPid.startsWith(cleanOrderPid) && !cleanOrderPid.startsWith(cleanPid)) {
+          console.warn('[Diagnostic] verify-payment proposal mismatch against order notes.');
           return res.status(400).json({
             success: false,
             verified: false,
@@ -144,6 +149,7 @@ export default async function handler(req: any, res: any) {
 
         // Validate amount (6900 paise = ₹69)
         if (orderData.amount && orderData.amount !== 6900) {
+          console.warn(`[Diagnostic] verify-payment amount mismatch: ${orderData.amount} != 6900`);
           return res.status(400).json({
             success: false,
             verified: false,
@@ -152,8 +158,8 @@ export default async function handler(req: any, res: any) {
           });
         }
       }
-    } catch (orderCheckErr) {
-      console.warn('Note: Razorpay live order lookup notice:', orderCheckErr);
+    } catch (orderCheckErr: any) {
+      console.warn('[Diagnostic] Razorpay live order lookup notice:', orderCheckErr?.message || orderCheckErr);
     }
 
     const slug = (body.slug || '').trim() || undefined;
@@ -182,6 +188,7 @@ export default async function handler(req: any, res: any) {
       message: 'Payment signature verified successfully.',
     });
   } catch (error: any) {
+    console.error('[Diagnostic] Error in /api/verify-payment handler:', error?.message || error);
     return res.status(500).json({
       success: false,
       verified: false,
