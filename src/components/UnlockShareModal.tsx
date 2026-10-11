@@ -407,7 +407,7 @@ export const UnlockShareModal: React.FC<UnlockShareModalProps> = ({
 
       const options: any = {
         key: razorpayKey,
-        amount: orderData.amount || 6900, // in paise (6900 paise for ₹69)
+        amount: orderData.amount || getOrderAmountPaise(), // in paise (100 for ₹1 test, 6900 for ₹69 live)
         currency: orderData.currency || 'INR',
         name: 'LoveLetter',
         description: checkoutDescription,

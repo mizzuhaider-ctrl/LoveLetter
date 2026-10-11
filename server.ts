@@ -28,27 +28,37 @@ import {
   getVerifiedPaymentByOrderId,
   getOrderIdForProposal,
 } from './src/server/paymentStore';
-
-/**
- * Server-side payment configuration derived directly from src/config/payment.ts
- * Single source of truth.
- */
-export const PAYMENT_CONFIG = {
-  displayPrice: 69,
-  amountInPaise: 6900,
-  currency: 'INR',
-  planName: 'PREMIUM',
-};
+import { PAYMENT_CONFIG as CLIENT_PAYMENT_CONFIG } from './src/config/payment';
 
 const getCleanEnv = (val?: string) => (val ? val.trim().replace(/^["']|["']$/g, '') : undefined);
 
 export const getRazorpayCredentials = () => {
-  const keyId = getCleanEnv(process.env.RAZORPAY_KEY_ID);
-  const keySecret = getCleanEnv(process.env.RAZORPAY_KEY_SECRET);
+  const isTestMode = CLIENT_PAYMENT_CONFIG.IS_TEST_MODE;
+  const liveKeyId = getCleanEnv(process.env.RAZORPAY_KEY_ID);
+  const liveKeySecret = getCleanEnv(process.env.RAZORPAY_KEY_SECRET);
+  const testKeyId = getCleanEnv(process.env.RAZORPAY_TEST_KEY_ID);
+  const testKeySecret = getCleanEnv(process.env.RAZORPAY_TEST_KEY_SECRET);
+
+  if (isTestMode) {
+    if (testKeyId && testKeySecret) {
+      return { keyId: testKeyId, keySecret: testKeySecret, isConfigured: true, mode: 'test' };
+    }
+    if (liveKeyId?.startsWith('rzp_test_') && liveKeySecret) {
+      return { keyId: liveKeyId, keySecret: liveKeySecret, isConfigured: true, mode: 'test' };
+    }
+    return {
+      keyId: testKeyId || liveKeyId,
+      keySecret: testKeySecret || liveKeySecret,
+      isConfigured: Boolean((testKeyId && testKeySecret) || (liveKeyId?.startsWith('rzp_test_') && liveKeySecret)),
+      mode: 'test',
+    };
+  }
+
   return {
-    keyId,
-    keySecret,
-    isConfigured: Boolean(keyId && keySecret),
+    keyId: liveKeyId,
+    keySecret: liveKeySecret,
+    isConfigured: Boolean(liveKeyId && liveKeySecret),
+    mode: 'live',
   };
 };
 
@@ -66,19 +76,18 @@ app.get('/api/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok' });
 });
 
-
-
 // Razorpay Payment Public Config (Never exposes secret key)
 app.get('/api/payment/config', (_req: Request, res: Response) => {
   const { keyId, isConfigured } = getRazorpayCredentials();
   res.json({
     isConfigured,
     keyId: keyId || '',
-    currency: PAYMENT_CONFIG.currency,
-    price: PAYMENT_CONFIG.displayPrice, // ₹69
-    displayPrice: PAYMENT_CONFIG.displayPrice,
-    amountInPaise: PAYMENT_CONFIG.amountInPaise, // 6900 paise
-    planName: PAYMENT_CONFIG.planName,
+    currency: CLIENT_PAYMENT_CONFIG.currency,
+    price: CLIENT_PAYMENT_CONFIG.DISPLAY_PRICE, // ₹69
+    displayPrice: CLIENT_PAYMENT_CONFIG.DISPLAY_PRICE,
+    amountInPaise: CLIENT_PAYMENT_CONFIG.IS_TEST_MODE ? CLIENT_PAYMENT_CONFIG.TEST_PRICE_PAISE : CLIENT_PAYMENT_CONFIG.PRODUCTION_PRICE,
+    isTestMode: CLIENT_PAYMENT_CONFIG.IS_TEST_MODE,
+    planName: CLIENT_PAYMENT_CONFIG.planName,
   });
 });
 
@@ -327,12 +336,14 @@ const handleCreateOrder = async (req: Request, res: Response) => {
 
     const { proposalId, yourName, currency: reqCurrency, receipt: reqReceipt } = req.body || {};
 
-    // Strict pricing: exactly ₹69 = 6900 paise. Server-enforced.
-    const amountInPaise = 6900;
+    // In Test Mode: ₹1 = 100 paise. In Production: ₹69 = 6900 paise.
+    const amountInPaise = CLIENT_PAYMENT_CONFIG.IS_TEST_MODE
+      ? CLIENT_PAYMENT_CONFIG.TEST_PRICE_PAISE
+      : CLIENT_PAYMENT_CONFIG.PRODUCTION_PRICE;
     const cleanProposalId = (proposalId || '').toString().trim() || `prop_${Date.now().toString(36)}`;
     const sanitizedId = cleanProposalId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 10) || 'love';
     const receipt = reqReceipt || `rcpt_${sanitizedId}_${Date.now().toString().slice(-6)}`;
-    const currency = reqCurrency || PAYMENT_CONFIG.currency || 'INR';
+    const currency = reqCurrency || CLIENT_PAYMENT_CONFIG.currency || 'INR';
 
     const orderPayload = {
       amount: amountInPaise,
@@ -341,7 +352,8 @@ const handleCreateOrder = async (req: Request, res: Response) => {
       notes: {
         proposalId: cleanProposalId.slice(0, 40),
         creator: (yourName || 'Romantic Creator').toString().replace(/[^\w\s-]/gi, '').trim().slice(0, 40) || 'Romantic Creator',
-        plan: PAYMENT_CONFIG.planName,
+        plan: CLIENT_PAYMENT_CONFIG.planName,
+        mode: CLIENT_PAYMENT_CONFIG.IS_TEST_MODE ? 'TEST' : 'LIVE',
       },
     };
 
@@ -380,7 +392,8 @@ const handleCreateOrder = async (req: Request, res: Response) => {
       currency: orderData.currency,
       keyId,
       key: keyId,
-      planName: PAYMENT_CONFIG.planName,
+      planName: CLIENT_PAYMENT_CONFIG.planName,
+      isTestMode: CLIENT_PAYMENT_CONFIG.IS_TEST_MODE,
     });
   } catch (error: any) {
     console.error('Error creating Razorpay order:', error?.message || error);
@@ -522,12 +535,16 @@ const handleVerifyPayment = async (req: Request, res: Response) => {
             });
           }
 
-          if (orderData.amount && orderData.amount !== 6900) {
+          const expectedAmount = CLIENT_PAYMENT_CONFIG.IS_TEST_MODE
+            ? CLIENT_PAYMENT_CONFIG.TEST_PRICE_PAISE
+            : CLIENT_PAYMENT_CONFIG.PRODUCTION_PRICE;
+
+          if (orderData.amount && orderData.amount !== expectedAmount) {
             return res.status(400).json({
               success: false,
               verified: false,
               error: 'Invalid payment amount',
-              message: `Payment amount does not match the required price of ₹69.`,
+              message: `Payment amount does not match the required price.`,
             });
           }
         }
@@ -583,7 +600,8 @@ const handleVerifyPayment = async (req: Request, res: Response) => {
         paymentId,
         proposalId,
         slug,
-        amount: paymentData?.amount || PAYMENT_CONFIG.amountInPaise,
+        amount: paymentData?.amount || (CLIENT_PAYMENT_CONFIG.IS_TEST_MODE ? CLIENT_PAYMENT_CONFIG.TEST_PRICE_PAISE : CLIENT_PAYMENT_CONFIG.PRODUCTION_PRICE),
+        isTestMode: CLIENT_PAYMENT_CONFIG.IS_TEST_MODE,
         status: paymentData?.status || 'captured',
         message: 'Payment signature verified successfully.',
       });

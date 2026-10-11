@@ -1,5 +1,8 @@
 import { recordOrder } from './paymentStore.js';
 
+// Set to true for safe ₹1 Razorpay sandbox testing, false for live ₹69 production
+export const IS_TEST_MODE = false;
+
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -18,30 +21,52 @@ export default async function handler(req: any, res: any) {
     });
   }
 
-  const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID?.trim();
-  const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET?.trim();
+  const liveKeyId = process.env.RAZORPAY_KEY_ID?.trim();
+  const liveKeySecret = process.env.RAZORPAY_KEY_SECRET?.trim();
+  const testKeyId = process.env.RAZORPAY_TEST_KEY_ID?.trim();
+  const testKeySecret = process.env.RAZORPAY_TEST_KEY_SECRET?.trim();
 
-  if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
-    console.error('[Diagnostic] create-order missing Razorpay credentials in environment.');
-    return res.status(401).json({
-      success: false,
-      error: 'Authentication failed',
-      message: 'Payment setup required. Razorpay credentials (RAZORPAY_KEY_ID & RAZORPAY_KEY_SECRET) are not configured in environment variables.',
-    });
+  let activeKeyId = liveKeyId;
+  let activeKeySecret = liveKeySecret;
+
+  if (IS_TEST_MODE) {
+    if (testKeyId && testKeySecret) {
+      activeKeyId = testKeyId;
+      activeKeySecret = testKeySecret;
+    } else if (liveKeyId?.startsWith('rzp_test_') && liveKeySecret) {
+      activeKeyId = liveKeyId;
+      activeKeySecret = liveKeySecret;
+    } else {
+      console.warn('[Diagnostic] create-order: Test Mode active but test credentials not found.');
+      return res.status(401).json({
+        success: false,
+        error: 'Test credentials required',
+        message: 'Razorpay Test Mode requires RAZORPAY_TEST_KEY_ID and RAZORPAY_TEST_KEY_SECRET in environment variables. Your live keys remain untouched.',
+      });
+    }
+  } else {
+    if (!liveKeyId || !liveKeySecret) {
+      console.error('[Diagnostic] create-order missing Razorpay credentials in environment.');
+      return res.status(401).json({
+        success: false,
+        error: 'Authentication failed',
+        message: 'Payment setup required. Razorpay credentials (RAZORPAY_KEY_ID & RAZORPAY_KEY_SECRET) are not configured in environment variables.',
+      });
+    }
   }
 
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
     const { proposalId, yourName, receipt: reqReceipt } = body;
 
-    // Strict pricing: exactly ₹69 = 6900 paise. Server-enforced.
-    const amountInPaise = 6900;
+    // In Test Mode: ₹1 = 100 paise. In Production: ₹69 = 6900 paise.
+    const amountInPaise = IS_TEST_MODE ? 100 : 6900;
     const cleanProposalId = (proposalId || '').toString().trim() || `prop_${Date.now().toString(36)}`;
     const sanitizedId = cleanProposalId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 10) || 'love';
     const receipt = reqReceipt || `rcpt_${sanitizedId}_${Date.now().toString().slice(-6)}`;
     const currency = 'INR';
 
-    const authHeader = `Basic ${Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString('base64')}`;
+    const authHeader = `Basic ${Buffer.from(`${activeKeyId}:${activeKeySecret}`).toString('base64')}`;
 
     const orderPayload = {
       amount: amountInPaise,
@@ -51,6 +76,7 @@ export default async function handler(req: any, res: any) {
         proposalId: cleanProposalId.slice(0, 40),
         creator: (yourName || 'Romantic Creator').toString().replace(/[^\w\s-]/gi, '').trim().slice(0, 40) || 'Romantic Creator',
         plan: 'PREMIUM',
+        mode: IS_TEST_MODE ? 'TEST' : 'LIVE',
       },
     };
 
@@ -73,7 +99,7 @@ export default async function handler(req: any, res: any) {
         success: false,
         error: desc,
         message: status === 401
-          ? 'Razorpay credentials authentication failed. Please verify your RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET.'
+          ? 'Razorpay credentials authentication failed. Please verify your API Key and Secret.'
           : (desc || 'Unable to generate Razorpay order. Please try again.'),
       });
     }
@@ -85,11 +111,12 @@ export default async function handler(req: any, res: any) {
       success: true,
       order_id: data.id,
       orderId: data.id,
-      amount: 6900,
+      amount: amountInPaise,
       currency: 'INR',
-      keyId: RAZORPAY_KEY_ID,
-      key: RAZORPAY_KEY_ID,
+      keyId: activeKeyId,
+      key: activeKeyId,
       planName: 'PREMIUM',
+      isTestMode: IS_TEST_MODE,
     });
   } catch (error: any) {
     console.error('[Diagnostic] Error in /api/create-order handler:', error?.message || error);
