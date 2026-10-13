@@ -86,7 +86,17 @@ export function applyHindiCrossfadeTransition(
 }
 
 // Default active track is Hindi Song ('/assets/Ishq_Wala_Love_smooth_cut.mp3') as safe fallback
-let activeTrackUrl = '/assets/Ishq_Wala_Love_smooth_cut.mp3';
+let activeTrackUrl = (() => {
+  if (typeof window !== 'undefined') {
+    try {
+      const saved = localStorage.getItem('selectedMusic');
+      if (saved === 'english') {
+        return '/assets/i-think-they-call-this-love.mp3';
+      }
+    } catch {}
+  }
+  return '/assets/Ishq_Wala_Love_smooth_cut.mp3';
+})();
 
 let detectedTracks: AudioTrackConfig = {
   english: '/assets/i-think-they-call-this-love.mp3',
@@ -183,6 +193,7 @@ export function setAudioTrack(trackUrl: string): void {
 
 export function initBackgroundMusic(trackUrl?: string): HTMLAudioElement | null {
   if (typeof window === 'undefined') return null;
+  setupPageLifecycleListeners();
 
   const targetTrack = trackUrl || activeTrackUrl;
   if (targetTrack) {
@@ -353,6 +364,7 @@ export function toggleMusic(): void {
       audio.volume = 0;
       audio.muted = true;
       wasPlayingBeforeCheckout = false;
+      wasPlayingBeforePageHidden = false;
     } else {
       // UNMUTE: restore volume to 0.7. Resume audible sound at exact current position.
       audio.muted = false;
@@ -445,6 +457,131 @@ export function pauseMusic(): void {
     audioElement.pause();
     notifyListeners();
   }
+}
+
+/**
+ * Page lifecycle state to track whether music was playing before leaving the website
+ */
+let hasAttachedPageLifecycle = false;
+let wasPlayingBeforePageHidden = false;
+
+/**
+ * Setup listeners for when user leaves the website, closes it, or returns to it:
+ * - When website closes or user leaves (switches tab, minimizes window, locks screen, navigates away):
+ *   The song stops immediately.
+ * - When user opens the website again / returns:
+ *   The song plays again from where it stopped (if it was playing and not muted).
+ */
+export function setupPageLifecycleListeners(): void {
+  if (typeof window === 'undefined' || typeof document === 'undefined' || hasAttachedPageLifecycle) {
+    return;
+  }
+  hasAttachedPageLifecycle = true;
+
+  // 1. Page Visibility: User switches tab, minimizes window, locks phone, or leaves browser
+  const handleVisibilityChange = () => {
+    if (document.visibilityState === 'hidden' || document.hidden) {
+      // User left the website or switched tab: STOP THE SONG IMMEDIATELY
+      if (audioElement && !audioElement.paused) {
+        wasPlayingBeforePageHidden = true;
+        audioElement.pause();
+        notifyListeners();
+      }
+    } else if (document.visibilityState === 'visible' && !document.hidden) {
+      // User opened or returned to the website again: play again if it was playing and not muted
+      if (wasPlayingBeforePageHidden && audioElement && !isMuted && !wasPlayingBeforeCheckout) {
+        wasPlayingBeforePageHidden = false;
+        const vol = (activeTrackUrl && activeTrackUrl.includes('Ishq_Wala_Love'))
+          ? applyHindiCrossfadeTransition(audioElement.currentTime, 0.7)
+          : 0.7;
+        audioElement.volume = vol;
+        audioElement.play().catch((err) => {
+          console.warn('Could not resume audio on return to website:', err);
+        });
+        notifyListeners();
+      } else {
+        wasPlayingBeforePageHidden = false;
+      }
+    }
+  };
+
+  // 2. Mobile app-switch / tab close / navigation
+  const handlePageHide = () => {
+    if (audioElement && !audioElement.paused) {
+      wasPlayingBeforePageHidden = true;
+      audioElement.pause();
+      notifyListeners();
+    }
+  };
+
+  const handlePageShow = () => {
+    if (wasPlayingBeforePageHidden && audioElement && !isMuted && !wasPlayingBeforeCheckout) {
+      wasPlayingBeforePageHidden = false;
+      const vol = (activeTrackUrl && activeTrackUrl.includes('Ishq_Wala_Love'))
+        ? applyHindiCrossfadeTransition(audioElement.currentTime, 0.7)
+        : 0.7;
+      audioElement.volume = vol;
+      audioElement.play().catch((err) => {
+        console.warn('Could not resume audio on pageshow:', err);
+      });
+      notifyListeners();
+    }
+  };
+
+  // 3. Tab or window unload/close: Stop immediately
+  const handleBeforeUnload = () => {
+    if (audioElement && !audioElement.paused) {
+      audioElement.pause();
+    }
+  };
+
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+  window.addEventListener('pagehide', handlePageHide);
+  window.addEventListener('pageshow', handlePageShow);
+  window.addEventListener('beforeunload', handleBeforeUnload);
+}
+
+/**
+ * Fallback to start audio on first interaction if autoplay policy blocks initial cold open
+ */
+let hasAttachedInteractionListener = false;
+
+export function setupAutoPlayOnFirstInteraction(): void {
+  if (typeof window === 'undefined' || hasAttachedInteractionListener) return;
+  hasAttachedInteractionListener = true;
+
+  const startOnInteraction = () => {
+    if (!isMuted && (!audioElement || audioElement.paused)) {
+      attemptPlay().catch(() => {});
+    }
+    window.removeEventListener('click', startOnInteraction, true);
+    window.removeEventListener('touchstart', startOnInteraction, true);
+    window.removeEventListener('pointerdown', startOnInteraction, true);
+    window.removeEventListener('keydown', startOnInteraction, true);
+  };
+
+  window.addEventListener('click', startOnInteraction, true);
+  window.addEventListener('touchstart', startOnInteraction, true);
+  window.addEventListener('pointerdown', startOnInteraction, true);
+  window.addEventListener('keydown', startOnInteraction, true);
+}
+
+/**
+ * Initializes automatic playback when the website opens:
+ * 1. Attaches lifecycle listeners (pause when leaving, play when returning).
+ * 2. Attempts automatic playback as supported by browser.
+ * 3. Enrolls one-time gesture listener if browser requires initial touch.
+ */
+export function initAutoPlayOnWebsiteOpen(): void {
+  if (typeof window === 'undefined') return;
+  setupPageLifecycleListeners();
+  setupAutoPlayOnFirstInteraction();
+  attemptPlay().catch(() => {});
+}
+
+// Automatically setup lifecycle listeners at module load
+if (typeof window !== 'undefined') {
+  setupPageLifecycleListeners();
 }
 
 /**

@@ -26,7 +26,7 @@ import { UnlockShareModal } from './components/UnlockShareModal';
 import { MusicSelectionModal } from './components/MusicSelectionModal';
 import { LegalPage } from './components/LegalPage';
 
-import { attemptPlay, setMusicLanguage } from './utils/audioController';
+import { attemptPlay, setMusicLanguage, initAutoPlayOnWebsiteOpen } from './utils/audioController';
 
 export default function App() {
   // Check if current URL is a recipient share link
@@ -44,6 +44,11 @@ export default function App() {
     });
     setMusicLanguage(lang);
     setIsMusicModalOpen(false);
+  }, []);
+
+  // When the website opens, play automatically as currently supported by the browser
+  useEffect(() => {
+    initAutoPlayOnWebsiteOpen();
   }, []);
   const [legalView, setLegalView] = useState<LegalPageType | null>(() => {
     if (typeof window === 'undefined') return null;
